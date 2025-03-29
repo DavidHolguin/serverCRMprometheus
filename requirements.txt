@@ -9,4 +9,3 @@ openai>=1.13.3
 supabase==1.2.0
 python-multipart==0.0.6
 httpx==0.25.1
-asyncio==3.4.3
