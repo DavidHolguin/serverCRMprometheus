@@ -463,10 +463,22 @@ async def process_webhook_message(
         
         # Process request data based on channel type
         if channel_type == "telegram":
+            # Check if the message is directly in the request or nested inside a property
+            telegram_data = request
+            
+            # Check if the message is nested inside another property
             if "message" not in request:
-                raise HTTPException(status_code=400, detail="Invalid Telegram webhook payload")
+                # Try to find the Telegram data in any of the properties
+                for key, value in request.items():
+                    if isinstance(value, dict) and "message" in value:
+                        telegram_data = value
+                        break
                 
-            message = request["message"]
+                # If still no message found, raise error
+                if "message" not in telegram_data:
+                    raise HTTPException(status_code=400, detail="Invalid Telegram webhook payload")
+            
+            message = telegram_data["message"]
             chat = message.get("chat", {})
             
             message_data = {
