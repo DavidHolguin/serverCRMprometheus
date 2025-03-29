@@ -2,11 +2,22 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copiar archivos de proyecto
-COPY . .
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Instalar dependencias
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
+COPY . .
 
 # Exponer puerto 8000 (predeterminado)
 EXPOSE 8000
