@@ -4,13 +4,8 @@ pydantic==2.11.1
 python-dotenv==1.0.0
 langchain==0.3.21
 langchain-community==0.3.20
-langchain-core==0.3.49
 langchain-openai==0.2.14
 openai==1.69.0
 supabase==1.2.0
 python-multipart==0.0.6
 httpx==0.25.1
-anyio==3.7.1
-pydantic-settings==2.8.1
-starlette==0.27.0
-typing_extensions==4.13.0
