@@ -30,13 +30,20 @@ class MessageResponse(MessageInDB):
 
 class ChannelMessageRequest(BaseModel):
     """Model for incoming channel message requests"""
-    canal_id: UUID4
+    canal_id: UUID4 = Field(..., description="ID of the channel")
     canal_identificador: str = Field(..., description="Channel identifier (e.g., phone number, chat ID)")
-    empresa_id: UUID4
-    chatbot_id: UUID4
-    lead_id: Optional[UUID4] = None
-    mensaje: str
-    metadata: Optional[Dict[str, Any]] = None
+    empresa_id: UUID4 = Field(..., description="ID of the company")
+    chatbot_id: UUID4 = Field(..., description="ID of the chatbot")
+    lead_id: Optional[UUID4] = Field(None, description="ID of the lead (optional)")
+    mensaje: str = Field(..., description="Message content")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    
+    # Channel-specific identifiers (only one will be used based on the channel)
+    session_id: Optional[str] = Field(None, description="Session ID for web channel")
+    phone_number: Optional[str] = Field(None, description="Phone number for WhatsApp channel")
+    sender_id: Optional[str] = Field(None, description="Sender ID for Messenger channel")
+    chat_id: Optional[str] = Field(None, description="Chat ID for Telegram channel")
+    instagram_id: Optional[str] = Field(None, description="Instagram ID for Instagram channel")
     
 class ChannelMessageResponse(BaseModel):
     """Model for channel message responses"""
@@ -44,3 +51,23 @@ class ChannelMessageResponse(BaseModel):
     conversacion_id: UUID4
     respuesta: str
     metadata: Optional[Dict[str, Any]] = None
+
+class AgentMessageRequest(BaseModel):
+    """Model for agent message requests"""
+    conversation_id: UUID4 = Field(..., description="ID of the conversation")
+    agent_id: UUID4 = Field(..., description="ID of the agent sending the message")
+    mensaje: str = Field(..., description="Message content")
+    deactivate_chatbot: bool = Field(False, description="Whether to deactivate the chatbot for this conversation")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+
+class ToggleChatbotRequest(BaseModel):
+    """Model for toggling chatbot status"""
+    conversation_id: UUID4 = Field(..., description="ID of the conversation")
+    chatbot_activo: bool = Field(..., description="Whether the chatbot should be active")
+
+class ToggleChatbotResponse(BaseModel):
+    """Model for toggle chatbot response"""
+    success: bool = Field(..., description="Whether the operation was successful")
+    conversation_id: str = Field(..., description="ID of the conversation")
+    chatbot_activo: bool = Field(..., description="Current chatbot active status")
+    data: Dict[str, Any] = Field(..., description="Full conversation data")
