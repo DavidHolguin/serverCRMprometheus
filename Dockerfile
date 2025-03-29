@@ -19,8 +19,11 @@ COPY . .
 # Variable de entorno para el puerto (valor predeterminado 8000)
 ENV PORT=8000
 
+# Hacer ejecutable el script de inicio
+RUN chmod +x start.sh
+
 # Exponer el puerto que usará la aplicación
 EXPOSE 8000
 
-# Comando para ejecutar la aplicación
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT
+# Comando para ejecutar la aplicación usando el script de inicio
+CMD ["./start.sh"]
