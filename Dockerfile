@@ -29,11 +29,14 @@ RUN pip install --upgrade pip && \
 # Copiar el resto de la aplicación
 COPY . .
 
+# Hacer ejecutable el script de entrada
+RUN chmod +x /app/entrypoint.sh
+
 # Exponer puerto 8000 (predeterminado)
 EXPOSE 8000
 
 # Variable de entorno para el puerto (valor predeterminado: 8000)
 ENV PORT=8000
 
-# Comando para ejecutar la aplicación
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT
+# Usar el script de entrada como punto de entrada
+ENTRYPOINT ["/app/entrypoint.sh"]
