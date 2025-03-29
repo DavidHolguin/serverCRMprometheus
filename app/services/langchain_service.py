@@ -198,6 +198,16 @@ class LangChainService:
         Returns:
             Generated response
         """
+        # Check if chatbot is active for this conversation
+        conv_result = supabase.table("conversaciones").select("chatbot_activo").eq("id", str(conversation_id)).limit(1).execute()
+        
+        if not conv_result.data or len(conv_result.data) == 0:
+            raise ValueError(f"Conversation {conversation_id} not found")
+        
+        # If chatbot is not active, return empty response
+        if not conv_result.data[0].get("chatbot_activo", True):
+            return ""
+            
         # Get LLM configuration
         llm_config = self._get_llm_config(empresa_id)
         
