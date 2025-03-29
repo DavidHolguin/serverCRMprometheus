@@ -32,5 +32,8 @@ COPY . .
 # Exponer puerto 8000 (predeterminado)
 EXPOSE 8000
 
-# Comando para ejecutar la aplicación con la variable PORT
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Variable de entorno para el puerto (valor predeterminado: 8000)
+ENV PORT=8000
+
+# Comando para ejecutar la aplicación
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT
