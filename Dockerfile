@@ -16,11 +16,11 @@ RUN pip install --no-cache-dir openai==1.69.0
 # Copiar el resto del código
 COPY . .
 
-# Variable de entorno para el puerto
+# Variable de entorno para el puerto (valor predeterminado 8000)
 ENV PORT=8000
 
 # Exponer el puerto que usará la aplicación
-EXPOSE ${PORT}
+EXPOSE 8000
 
 # Comando para ejecutar la aplicación
-CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT
