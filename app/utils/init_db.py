@@ -33,7 +33,7 @@ def create_test_channels():
             "tipo": "messenger",
             "descripcion": "Canal de Facebook Messenger",
             "logo_url": "https://example.com/logos/messenger.png",
-            "configuracion_requerida": {"page_id": True, "access_token": True, "webhook_url": True},
+            "configuracion_requerida": {"page_id": True, "access_token": True, "webhook_url": True, "verify_token": True},
             "is_active": True
         },
         {
