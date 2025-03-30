@@ -393,7 +393,19 @@ class LeadEvaluationService:
             chain = prompt_template | llm | parser
             
             # Generar evaluación
-            evaluation = chain.invoke({})
+            evaluation_result = chain.invoke({})
+            
+            # Asegurarse de que la evaluación sea un objeto EvaluacionLead
+            if isinstance(evaluation_result, dict):
+                evaluation = EvaluacionLead(
+                    score_potencial=evaluation_result.get("score_potencial", 5),
+                    score_satisfaccion=evaluation_result.get("score_satisfaccion", 5),
+                    interes_productos=evaluation_result.get("interes_productos", []),
+                    comentario=evaluation_result.get("comentario", ""),
+                    palabras_clave=evaluation_result.get("palabras_clave", [])
+                )
+            else:
+                evaluation = evaluation_result
             
             # Guardar evaluación en la base de datos
             evaluation_data = {
