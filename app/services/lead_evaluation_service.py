@@ -184,8 +184,8 @@ class LeadEvaluationService:
         # Destacar los últimos 3 mensajes como los más recientes
         recent_messages = []
         if len(formatted_messages) > 3:
-            conversation_text = "\n".join(formatted_messages[:-3])
-            recent_messages = formatted_messages[-3:]
+            conversation_text = "\n".join(formatted_messages[:-2])
+            recent_messages = formatted_messages[-2:]
             recent_messages_text = "\n".join(recent_messages)
         else:
             conversation_text = "\n".join(formatted_messages)
@@ -348,6 +348,8 @@ class LeadEvaluationService:
         
         # Verificar si hay un cambio drástico en la evaluación
         drastic_change = False
+        
+        # Si hay evaluaciones previas, comparar con la anterior
         if len(previous_evaluations) > 1:
             # Ignorar la evaluación actual (que ya está en la BD)
             prev_eval = previous_evaluations[1]  # La segunda evaluación más reciente
@@ -359,10 +361,12 @@ class LeadEvaluationService:
                 drastic_change = True
         
         # Fórmula de score:
-        # - Si hay un cambio drástico negativo, dar más peso a la nueva evaluación
-        # - De lo contrario, usar una ponderación más equilibrada
-        if drastic_change:
-            # 40% score actual + 60% score potencial de la evaluación (más peso a la nueva evaluación)
+        if len(previous_evaluations) == 0:
+            # Primera evaluación: asignar directamente el score potencial como base
+            new_score = evaluation.score_potencial * 10
+        elif drastic_change:
+            # Si hay un cambio drástico negativo, dar más peso a la nueva evaluación
+            # 40% score actual + 60% score potencial de la evaluación
             new_score = int(current_score * 0.4 + evaluation.score_potencial * 6)
         else:
             # 70% score actual + 30% score potencial de la evaluación
@@ -374,6 +378,9 @@ class LeadEvaluationService:
         # Si el score potencial es muy bajo (1-3), asegurar que el score total también baje significativamente
         if evaluation.score_potencial <= 3:
             new_score = min(new_score, current_score - 10)  # Forzar una reducción de al menos 10 puntos
+            
+        # Asegurar que el score no sea negativo
+        new_score = max(new_score, 0)
         
         # Actualizar lead
         supabase.table("leads").update({"score": new_score}).eq("id", str(lead_id)).execute()
