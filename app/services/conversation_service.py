@@ -4,6 +4,7 @@ from datetime import datetime
 
 from app.db.supabase_client import supabase
 from app.services.langchain_service import langchain_service
+from app.services.lead_evaluation_service import lead_evaluation_service
 
 class ConversationService:
     """Service for handling conversations and messages"""
@@ -169,13 +170,36 @@ class ConversationService:
             # Save chatbot response
             bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
             
+            # Evaluar el mensaje del usuario para determinar el valor del lead
+            try:
+                evaluation = lead_evaluation_service.evaluate_message(
+                    lead_id=lead_id,
+                    conversacion_id=conversation_id,
+                    mensaje_id=UUID(user_message["id"]),
+                    empresa_id=empresa_id
+                )
+                
+                # Incluir la evaluación en los metadatos de respuesta
+                metadata_response = {
+                    "user_message_id": user_message["id"],
+                    "evaluation": {
+                        "id": evaluation["id"],
+                        "score_potencial": evaluation["score_potencial"],
+                        "score_satisfaccion": evaluation["score_satisfaccion"]
+                    }
+                }
+            except Exception as eval_error:
+                print(f"Error al evaluar el mensaje: {eval_error}")
+                # Si falla la evaluación, continuar sin ella
+                metadata_response = {
+                    "user_message_id": user_message["id"]
+                }
+            
             return {
                 "mensaje_id": bot_message["id"],
                 "conversacion_id": str(conversation_id),
                 "respuesta": response,
-                "metadata": {
-                    "user_message_id": user_message["id"]
-                }
+                "metadata": metadata_response
             }
         except Exception as e:
             print(f"Error in process_channel_message: {e}")

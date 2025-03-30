@@ -16,9 +16,17 @@ from app.models.message import (
 from app.models.conversation import ConversationHistory
 from app.services.conversation_service import conversation_service
 from app.models.examples import EXAMPLES
+from app.api.endpoints.evaluations import router as evaluations_router
 
 # Create API router
 api_router = APIRouter()
+
+# Incluir router de evaluaciones
+api_router.include_router(
+    evaluations_router,
+    prefix="/evaluations",
+    tags=["evaluations"]
+)
 
 @api_router.post("/message", response_model=ChannelMessageResponse)
 async def process_message(request: ChannelMessageRequest):

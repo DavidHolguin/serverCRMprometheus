@@ -1,0 +1,11 @@
+
+CREATE OR REPLACE FUNCTION public.ejecutar_sql(sql text)
+RETURNS SETOF json
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS }
+BEGIN
+  RETURN QUERY EXECUTE sql;
+END;
+};
+
