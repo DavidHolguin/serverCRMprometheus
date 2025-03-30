@@ -16,16 +16,16 @@ router = APIRouter()
 
 @router.post("/evaluate-message/", response_model=Dict[str, Any])
 async def evaluate_message(
-    request: EvaluateMessageRequest
-    # Comentado para desarrollo: current_user: Dict[str, Any] = Depends(get_current_user)
+    request: EvaluateMessageRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Evalúa un mensaje específico para determinar el valor del lead
     """
     try:
-        # Comentado para desarrollo
-        # if str(current_user["empresa_id"]) != str(request.empresa_id):
-        #     raise HTTPException(status_code=403, detail="No tienes permiso para evaluar mensajes de esta empresa")
+        # Verificar que el usuario pertenece a la empresa
+        if str(current_user["empresa_id"]) != str(request.empresa_id):
+            raise HTTPException(status_code=403, detail="No tienes permiso para evaluar mensajes de esta empresa")
         
         # Realizar la evaluación
         evaluation = lead_evaluation_service.evaluate_message(
@@ -44,16 +44,16 @@ async def evaluate_message(
 
 @router.post("/evaluate-conversation/", response_model=Dict[str, Any])
 async def evaluate_conversation(
-    request: EvaluateConversationRequest
-    # Comentado para desarrollo: current_user: Dict[str, Any] = Depends(get_current_user)
+    request: EvaluateConversationRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Evalúa todos los mensajes de una conversación para determinar el valor del lead
     """
     try:
-        # Comentado para desarrollo
-        # if str(current_user["empresa_id"]) != str(request.empresa_id):
-        #     raise HTTPException(status_code=403, detail="No tienes permiso para evaluar conversaciones de esta empresa")
+        # Verificar que el usuario pertenece a la empresa
+        if str(current_user["empresa_id"]) != str(request.empresa_id):
+            raise HTTPException(status_code=403, detail="No tienes permiso para evaluar conversaciones de esta empresa")
         
         # Obtener información de la conversación
         result = supabase.table("conversaciones").select("*").eq("id", str(request.conversacion_id)).limit(1).execute()
@@ -105,8 +105,8 @@ async def evaluate_conversation(
 @router.get("/lead-evaluations/{lead_id}", response_model=Dict[str, Any])
 async def get_lead_evaluations(
     lead_id: UUID,
-    limit: int = Query(10, ge=1, le=100)
-    # Comentado para desarrollo: current_user: Dict[str, Any] = Depends(get_current_user)
+    limit: int = Query(10, ge=1, le=100),
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Obtiene las evaluaciones existentes para un lead específico
@@ -120,10 +120,9 @@ async def get_lead_evaluations(
         
         lead = lead_result.data[0]
         
-        # Comentado para desarrollo
-        # # Verificar que el usuario pertenece a la empresa del lead
-        # if str(current_user["empresa_id"]) != str(lead["empresa_id"]):
-        #     raise HTTPException(status_code=403, detail="No tienes permiso para ver evaluaciones de este lead")
+        # Verificar que el usuario pertenece a la empresa del lead
+        if str(current_user["empresa_id"]) != str(lead["empresa_id"]):
+            raise HTTPException(status_code=403, detail="No tienes permiso para ver evaluaciones de este lead")
         
         # Obtener evaluaciones
         evaluations_result = supabase.table("evaluaciones_llm").select("*").eq("lead_id", str(lead_id)).order("fecha_evaluacion", desc=True).limit(limit).execute()
@@ -140,8 +139,8 @@ async def get_lead_evaluations(
 
 @router.get("/conversation-evaluations/{conversacion_id}", response_model=Dict[str, Any])
 async def get_conversation_evaluations(
-    conversacion_id: UUID
-    # Comentado para desarrollo: current_user: Dict[str, Any] = Depends(get_current_user)
+    conversacion_id: UUID,
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Obtiene las evaluaciones existentes para una conversación específica
@@ -163,10 +162,9 @@ async def get_conversation_evaluations(
         
         lead = lead_result.data[0]
         
-        # Comentado para desarrollo
-        # # Verificar que el usuario pertenece a la empresa del lead
-        # if str(current_user["empresa_id"]) != str(lead["empresa_id"]):
-        #     raise HTTPException(status_code=403, detail="No tienes permiso para ver evaluaciones de esta conversación")
+        # Verificar que el usuario pertenece a la empresa del lead
+        if str(current_user["empresa_id"]) != str(lead["empresa_id"]):
+            raise HTTPException(status_code=403, detail="No tienes permiso para ver evaluaciones de esta conversación")
         
         # Obtener evaluaciones
         evaluations_result = supabase.table("evaluaciones_llm").select("*").eq("conversacion_id", str(conversacion_id)).order("fecha_evaluacion", desc=True).execute()
@@ -185,17 +183,16 @@ async def get_conversation_evaluations(
 @router.get("/dashboard-stats/{empresa_id}", response_model=Dict[str, Any])
 async def get_dashboard_stats(
     empresa_id: UUID,
-    days: int = Query(30, ge=1, le=365)
-    # Comentado para desarrollo: current_user: Dict[str, Any] = Depends(get_current_user)
+    days: int = Query(30, ge=1, le=365),
+    current_user: Dict[str, Any] = Depends(get_current_user)
 ):
     """
     Obtiene estadísticas de evaluaciones para el dashboard
     """
     try:
-        # Comentado para desarrollo
-        # # Verificar que el usuario pertenece a la empresa
-        # if str(current_user["empresa_id"]) != str(empresa_id):
-        #     raise HTTPException(status_code=403, detail="No tienes permiso para ver estadísticas de esta empresa")
+        # Verificar que el usuario pertenece a la empresa
+        if str(current_user["empresa_id"]) != str(empresa_id):
+            raise HTTPException(status_code=403, detail="No tienes permiso para ver estadísticas de esta empresa")
         
         # Consulta SQL para obtener estadísticas
         sql = f"""
