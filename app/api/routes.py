@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends, Body, Query, Path
 from typing import Dict, Any, List, Optional
 from uuid import UUID
+import logging
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 from app.models.message import (
     ChannelMessageRequest, 
@@ -364,13 +368,26 @@ async def agent_send_message(request: AgentMessageRequest = Body(..., example=EX
             }
         }).eq("id", str(conversation_id)).execute()
         
+        # Send message to the lead through the appropriate channel
+        from app.services.channel_service import channel_service
+        channel_response = channel_service.send_message_to_channel(
+            conversation_id=conversation_id,
+            message=mensaje,
+            metadata={
+                "agent_id": str(agent_id),
+                "origin": "agent",
+                "message_id": str(mensaje_id)
+            }
+        )
+        
         return ChannelMessageResponse(
             mensaje_id=mensaje_id,
             conversacion_id=conversation_id,
             respuesta=mensaje,
             metadata={
                 "agent_id": str(agent_id),
-                "origin": "agent"
+                "origin": "agent",
+                "channel_response": channel_response
             }
         )
     except HTTPException:
@@ -495,26 +512,70 @@ async def process_webhook_message(
             }
             
         elif channel_type == "messenger":
-            if "entry" not in request:
+            # Verificar si es una solicitud de verificación de webhook
+            if "object" not in request:
                 raise HTTPException(status_code=400, detail="Invalid Messenger webhook payload")
                 
-            entry = request["entry"][0] if request["entry"] else {}
-            messaging = entry.get("messaging", [{}])[0] if entry.get("messaging") else {}
-            sender = messaging.get("sender", {})
-            message = messaging.get("message", {})
+            # Verificar que el objeto sea una página
+            if request["object"] != "page":
+                raise HTTPException(status_code=400, detail="Webhook object is not a page")
+                
+            if "entry" not in request or not request["entry"]:
+                raise HTTPException(status_code=400, detail="Invalid Messenger webhook payload: no entries")
+                
+            # Procesar la primera entrada (normalmente solo hay una)
+            entry = request["entry"][0]
             
+            # Verificar si hay mensajes de mensajería
+            if "messaging" not in entry or not entry["messaging"]:
+                logger.warning("Entrada de Messenger sin mensajes de mensajería")
+                return {"success": True, "message": "No messaging data found"}
+                
+            # Obtener el primer evento de mensajería
+            messaging = entry["messaging"][0]
+            
+            # Verificar si hay un remitente
+            if "sender" not in messaging or "id" not in messaging["sender"]:
+                raise HTTPException(status_code=400, detail="Invalid Messenger webhook: no sender ID")
+                
+            sender = messaging["sender"]
+            sender_id = sender.get("id")
+            
+            # Verificar el tipo de evento (mensaje, postback, etc.)
+            message_text = ""
+            
+            if "message" in messaging:
+                message = messaging["message"]
+                
+                # Verificar si es un mensaje de texto
+                if "text" in message:
+                    message_text = message["text"]
+                # Si no hay texto, podría ser un adjunto (imagen, audio, etc.)
+                elif "attachments" in message:
+                    # Procesar el primer adjunto
+                    attachment = message["attachments"][0]
+                    message_text = f"[Adjunto de tipo: {attachment.get('type', 'desconocido')}]"
+            # Verificar si es un postback (botón presionado)
+            elif "postback" in messaging:
+                postback = messaging["postback"]
+                message_text = postback.get("payload", "")
+                
+            # Crear los datos del mensaje
             message_data = {
                 "canal_id": canal_id,
-                "canal_identificador": sender.get("id"),
+                "canal_identificador": sender_id,
                 "chatbot_id": chatbot_id,
-                "mensaje": message.get("text", ""),
+                "mensaje": message_text,
                 "metadata": {
                     "sender": sender,
                     "recipient": messaging.get("recipient", {}),
-                    "timestamp": messaging.get("timestamp")
+                    "timestamp": messaging.get("timestamp"),
+                    "raw_event": messaging  # Guardar el evento completo para referencia
                 },
-                "sender_id": sender.get("id")
+                "sender_id": sender_id
             }
+            
+            logger.info(f"Mensaje de Messenger procesado: {message_text[:50]}...")
             
         elif channel_type == "whatsapp":
             if "entry" not in request:
@@ -635,11 +696,19 @@ async def verify_webhook(
         
         # Facebook verification (Messenger, WhatsApp, Instagram)
         if hub_mode == "subscribe" and hub_verify_token:
+            # Para Messenger, el verify_token debe coincidir con el configurado en tu app de Facebook
             verify_token = configuracion.get("verify_token")
             
-            if verify_token and hub_verify_token == verify_token:
+            if not verify_token:
+                logger.warning(f"verify_token no encontrado en la configuración para {channel_type}")
+                raise HTTPException(status_code=403, detail="Verification token not configured")
+            
+            if hub_verify_token == verify_token:
+                logger.info(f"Verificación exitosa del webhook para {channel_type}")
+                # Devolver el hub_challenge es crucial para que Facebook confirme la verificación
                 return hub_challenge
                 
+            logger.warning(f"Token de verificación inválido para {channel_type}")
             raise HTTPException(status_code=403, detail="Invalid verification token")
             
         # Telegram verification
@@ -652,4 +721,5 @@ async def verify_webhook(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error verificando webhook: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error verifying webhook: {str(e)}")
