@@ -181,7 +181,15 @@ class LeadEvaluationService:
             origen = "Usuario" if msg["origen"] == "user" else "Chatbot"
             formatted_messages.append(f"{origen}: {msg['contenido']}")
         
-        conversation_text = "\n".join(formatted_messages)
+        # Destacar los últimos 3 mensajes como los más recientes
+        recent_messages = []
+        if len(formatted_messages) > 3:
+            conversation_text = "\n".join(formatted_messages[:-3])
+            recent_messages = formatted_messages[-3:]
+            recent_messages_text = "\n".join(recent_messages)
+        else:
+            conversation_text = "\n".join(formatted_messages)
+            recent_messages_text = ""
         
         # Formatear intenciones para el prompt
         intentions_text = []
@@ -216,8 +224,11 @@ class LeadEvaluationService:
         - Teléfono: {lead_info.get('telefono', 'No disponible')}
         - Score actual: {lead_info.get('score', 0)}
         
-        # Conversación
+        # Conversación Completa
         {conversation_text}
+        
+        # Mensajes Más Recientes (PRESTA ESPECIAL ATENCIÓN A ESTOS)
+        {recent_messages_text}
         
         # Intenciones Configuradas
         {intentions_formatted}
@@ -228,12 +239,24 @@ class LeadEvaluationService:
         # Tipos de Interacción
         {interaction_types_formatted}
         
-        Analiza cuidadosamente la conversación y evalúa:
+        Analiza cuidadosamente la conversación completa, pero da MAYOR PESO a los mensajes más recientes, ya que representan el estado actual del lead. Evalúa:
+        
         1. El potencial del lead como cliente (score_potencial) en una escala de 1 a 10
+           - Si los mensajes recientes contienen señales negativas (cancelaciones, quejas, problemas personales graves), reduce significativamente esta puntuación
+           - Si hay un cambio drástico de tono positivo a negativo en los mensajes recientes, esto debe reflejarse en la puntuación
+        
         2. La satisfacción del lead con la conversación (score_satisfaccion) en una escala de 1 a 10
+           - Considera principalmente los mensajes más recientes para esta puntuación
+           - Detecta cambios de humor o tono en la conversación
+        
         3. Los productos en los que el lead ha mostrado interés (interes_productos)
+           - Incluye productos mencionados en toda la conversación
+        
         4. Un comentario breve sobre el valor del lead y su comportamiento (comentario)
+           - Menciona explícitamente cualquier cambio importante en el tono o intención del lead
+        
         5. Palabras clave identificadas en la conversación que indican intenciones o intereses (palabras_clave)
+           - Incluye palabras clave de toda la conversación, pero prioriza las de los mensajes recientes
         
         Responde con un objeto JSON que contenga estos campos.
         """
@@ -316,14 +339,41 @@ class LeadEvaluationService:
         # Obtener información actual del lead
         lead_info = self._get_lead_info(lead_id)
         
+        # Obtener evaluaciones previas
+        result = supabase.table("evaluaciones_llm").select("*").eq("lead_id", str(lead_id)).order("fecha_evaluacion", desc=True).limit(2).execute()
+        previous_evaluations = result.data if result.data else []
+        
         # Calcular nuevo score
         current_score = lead_info.get("score", 0)
         
-        # Fórmula simple: 70% score actual + 30% score potencial de la evaluación
-        new_score = int(current_score * 0.7 + evaluation.score_potencial * 3)
+        # Verificar si hay un cambio drástico en la evaluación
+        drastic_change = False
+        if len(previous_evaluations) > 1:
+            # Ignorar la evaluación actual (que ya está en la BD)
+            prev_eval = previous_evaluations[1]  # La segunda evaluación más reciente
+            
+            # Detectar cambios drásticos en el potencial o satisfacción
+            if prev_eval.get("score_potencial", 5) - evaluation.score_potencial >= 3:
+                drastic_change = True
+            if prev_eval.get("score_satisfaccion", 5) - evaluation.score_satisfaccion >= 3:
+                drastic_change = True
+        
+        # Fórmula de score:
+        # - Si hay un cambio drástico negativo, dar más peso a la nueva evaluación
+        # - De lo contrario, usar una ponderación más equilibrada
+        if drastic_change:
+            # 40% score actual + 60% score potencial de la evaluación (más peso a la nueva evaluación)
+            new_score = int(current_score * 0.4 + evaluation.score_potencial * 6)
+        else:
+            # 70% score actual + 30% score potencial de la evaluación
+            new_score = int(current_score * 0.7 + evaluation.score_potencial * 3)
         
         # Limitar el score a un máximo de 100
         new_score = min(new_score, 100)
+        
+        # Si el score potencial es muy bajo (1-3), asegurar que el score total también baje significativamente
+        if evaluation.score_potencial <= 3:
+            new_score = min(new_score, current_score - 10)  # Forzar una reducción de al menos 10 puntos
         
         # Actualizar lead
         supabase.table("leads").update({"score": new_score}).eq("id", str(lead_id)).execute()
