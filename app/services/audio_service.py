@@ -68,7 +68,14 @@ class AudioService:
             
             # Calcular tamaño y duración
             file_size = os.path.getsize(temp_path)
-            duration = float(audio_info.get('duration', 0))
+            
+            # Manejar el caso cuando la duración es 'N/A' o un valor no numérico
+            try:
+                duration_str = audio_info.get('duration', '0')
+                duration = float(duration_str) if duration_str and duration_str.lower() != 'n/a' else 0
+            except (ValueError, TypeError):
+                print(f"No se pudo convertir la duración '{audio_info.get('duration')}' a float, usando 0")
+                duration = 0
             
             # Normalizar formato
             formato_normalizado = audio_info.get('format_name', formato).split(',')[0]
@@ -76,6 +83,8 @@ class AudioService:
             return temp_path, formato_normalizado, file_size, duration
         
         except Exception as e:
+            import traceback
+            traceback.print_exc()  # Imprimir el traceback completo para depuración
             raise ValueError(f"Error al decodificar o guardar el audio: {str(e)}")
     
     def _upload_to_supabase(self, file_path: str, conversacion_id: UUID, mensaje_id: UUID) -> str:
