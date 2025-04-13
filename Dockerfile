@@ -2,11 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Instalar dependencias del sistema
+# Instalar dependencias del sistema incluyendo ffmpeg para procesamiento de audio
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     python3-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copiar requirements primero para mejor caché
@@ -24,7 +25,9 @@ RUN pip install --upgrade pip && \
     pip install openai==0.28.1 && \
     pip install langchain==0.0.267 && \
     pip install langchain-community==0.0.13 && \
-    pip install langchain-openai==0.0.2
+    pip install langchain-openai==0.0.2 && \
+    pip install pydub==0.25.1 && \
+    pip install numpy==1.26.0
 
 # Copiar el resto de la aplicación
 COPY . .
