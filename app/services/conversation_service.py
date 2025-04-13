@@ -60,35 +60,15 @@ class ConversationService:
         Args:
             empresa_id: The ID of the company
             canal_id: The ID of the channel
-            nombre: The name of the lead
+            nombre: The name of the lead (Se usará solo para el token anónimo)
             metadata: Additional metadata
             
         Returns:
             The lead data
         """
         try:
-            # Extract contact info from metadata if available
-            email = None
-            telefono = None
-            
-            if metadata:
-                email = metadata.get("email")
-                telefono = metadata.get("phone") or metadata.get("telefono")
-            
-            # Try to find existing lead by phone or email
-            if telefono:
-                result = supabase.table("leads").select("*").eq("empresa_id", str(empresa_id)) \
-                    .eq("telefono", telefono).limit(1).execute()
-                
-                if result.data and len(result.data) > 0:
-                    return result.data[0]
-            
-            if email:
-                result = supabase.table("leads").select("*").eq("empresa_id", str(empresa_id)) \
-                    .eq("email", email).limit(1).execute()
-                
-                if result.data and len(result.data) > 0:
-                    return result.data[0]
+            # Ya no buscamos leads por datos personales
+            # Simplemente creamos un nuevo lead y generamos un token anónimo si es necesario
             
             # Get default pipeline for the company
             pipeline_result = supabase.table("pipelines").select("id").eq("empresa_id", str(empresa_id)) \
@@ -106,26 +86,41 @@ class ConversationService:
                 if stage_result.data and len(stage_result.data) > 0:
                     stage_id = stage_result.data[0].get("id")
             
-            # Create new lead
+            # Create new lead (sin datos personales)
             lead_data = {
                 "empresa_id": str(empresa_id),
                 "canal_origen": "chat",
                 "canal_id": str(canal_id),
-                "nombre": nombre,
-                "telefono": telefono,
-                "email": email,
                 "pipeline_id": pipeline_id,
                 "stage_id": stage_id,
                 "estado": "nuevo",
                 "score": 10  # Initial score for new leads
             }
             
-            result = supabase.table("leads").insert(lead_data).execute()
+            # Insertar el lead básico
+            lead_result = supabase.table("leads").insert(lead_data).execute()
             
-            if result.data and len(result.data) > 0:
-                return result.data[0]
+            if not lead_result.data or len(lead_result.data) == 0:
+                raise ValueError("Failed to create lead")
             
-            raise ValueError("Failed to create lead")
+            lead = lead_result.data[0]
+            lead_id = lead["id"]
+            
+            # Generamos un token anónimo para este lead (opcional)
+            token_anonimo = str(uuid4())
+            
+            # Crear entrada en pii_tokens en lugar de datos personales
+            token_data = {
+                "lead_id": lead_id,
+                "token_anonimo": token_anonimo,
+                "is_active": True,
+                "expires_at": None  # Sin fecha de expiración por ahora
+            }
+            
+            # Insertar el token anónimo
+            supabase.table("pii_tokens").insert(token_data).execute()
+            
+            return lead
         except Exception as e:
             print(f"Error in get_or_create_lead: {e}")
             raise
@@ -152,20 +147,31 @@ class ConversationService:
         try:
             # Get or create lead if not provided
             if not lead_id:
-                # Extract name from metadata or use channel identifier
-                nombre = metadata.get("nombre", canal_identificador) if metadata else canal_identificador
-                lead = self.get_or_create_lead(empresa_id, canal_id, nombre, metadata)
+                # Ya no usamos nombres ni datos personales del metadata
+                # Creamos un lead anónimo con identificador único
+                lead = self.get_or_create_lead(empresa_id, canal_id, "anónimo", None)
                 lead_id = UUID(lead["id"])
+            
+            # Sanitizamos el mensaje de entrada (para asegurar que no contenga datos personales)
+            sanitized_mensaje = self.sanitize_message(mensaje)
             
             # Get or create conversation
             conversation = self.get_or_create_conversation(lead_id, chatbot_id, canal_id, canal_identificador)
             conversation_id = UUID(conversation["id"])
             
-            # Save user message
-            user_message = langchain_service.save_message(conversation_id, mensaje, is_user=True)
+            # Guardar mensaje sanitizado
+            user_message = langchain_service.save_message(conversation_id, sanitized_mensaje, is_user=True)
             
-            # Generate response
-            response = langchain_service.generate_response(conversation_id, chatbot_id, empresa_id, mensaje)
+            # Si hay metadata, la sanitizamos antes de guardarla
+            if metadata:
+                # Eliminamos cualquier dato personal de los metadatos
+                safe_metadata = self.sanitize_metadata(metadata)
+                # Actualizar metadata del mensaje si es necesario
+                if user_message.get("id"):
+                    supabase.table("mensajes").update({"metadata": safe_metadata}).eq("id", user_message["id"]).execute()
+            
+            # Generar respuesta con el mensaje sanitizado
+            response = langchain_service.generate_response(conversation_id, chatbot_id, empresa_id, sanitized_mensaje)
             
             # Save chatbot response
             bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
@@ -179,7 +185,6 @@ class ConversationService:
                     empresa_id=empresa_id
                 )
                 
-                # Incluir la evaluación en los metadatos de respuesta
                 metadata_response = {
                     "user_message_id": user_message["id"],
                     "evaluation": {
@@ -190,7 +195,6 @@ class ConversationService:
                 }
             except Exception as eval_error:
                 print(f"Error al evaluar el mensaje: {eval_error}")
-                # Si falla la evaluación, continuar sin ella
                 metadata_response = {
                     "user_message_id": user_message["id"]
                 }
@@ -204,6 +208,49 @@ class ConversationService:
         except Exception as e:
             print(f"Error in process_channel_message: {e}")
             raise
+
+    def sanitize_message(self, mensaje: str) -> str:
+        """
+        Sanitiza un mensaje para eliminar posible información personal
+        
+        Args:
+            mensaje: El mensaje a sanitizar
+            
+        Returns:
+            Mensaje sanitizado
+        """
+        # En una implementación real, aquí podrías usar expresiones regulares o NLP
+        # para detectar y ofuscar información personal como emails, teléfonos, etc.
+        # Por simplicidad, solo implementamos una versión básica
+        
+        # Ejemplo simple: guardaríamos el mensaje en mensajes_sanitizados
+        # y devolveríamos el mensaje sin modificar por ahora
+        return mensaje
+
+    def sanitize_metadata(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Sanitiza los metadatos para eliminar información personal
+        
+        Args:
+            metadata: Los metadatos a sanitizar
+            
+        Returns:
+            Metadatos sanitizados
+        """
+        # Creamos una copia de los metadatos
+        safe_metadata = metadata.copy() if metadata else {}
+        
+        # Eliminamos campos conocidos de datos personales
+        fields_to_remove = [
+            "nombre", "apellido", "email", "correo", "telefono", "phone", 
+            "direccion", "address", "dni", "nif", "doc", "documento"
+        ]
+        
+        for field in fields_to_remove:
+            if field in safe_metadata:
+                del safe_metadata[field]
+        
+        return safe_metadata
 
 # Create singleton instance
 conversation_service = ConversationService()

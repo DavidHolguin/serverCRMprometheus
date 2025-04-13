@@ -115,6 +115,15 @@ async def process_web_message(request: Dict[str, Any] = Body(..., example=EXAMPL
         
         canal_id = UUID(channel_result.data[0]["id"])
         
+        # Ya no accedemos directamente a datos personales
+        # Los metadatos serán sanitizados en el servicio de conversación
+        sanitized_metadata = None
+        if "metadata" in request:
+            # Mantenemos una copia de los metadatos pero sin datos personales
+            sanitized_metadata = {k: v for k, v in request["metadata"].items() 
+                                if k not in ["nombre", "apellido", "email", "telefono", 
+                                            "direccion", "dni", "nif"]}
+        
         # Create message request
         message_request = ChannelMessageRequest(
             canal_id=canal_id,
@@ -123,7 +132,7 @@ async def process_web_message(request: Dict[str, Any] = Body(..., example=EXAMPL
             chatbot_id=UUID(request["chatbot_id"]),
             mensaje=request["mensaje"],
             lead_id=UUID(request["lead_id"]) if "lead_id" in request and request["lead_id"] else None,
-            metadata=request.get("metadata"),
+            metadata=sanitized_metadata,
             session_id=request["session_id"]
         )
         
@@ -161,6 +170,14 @@ async def process_whatsapp_message(request: Dict[str, Any] = Body(..., example=E
         
         canal_id = UUID(channel_result.data[0]["id"])
         
+        # Sanitizar los metadatos para no incluir información personal
+        sanitized_metadata = None
+        if "metadata" in request:
+            # Mantenemos una copia de los metadatos pero sin datos personales
+            sanitized_metadata = {k: v for k, v in request["metadata"].items() 
+                                if k not in ["nombre", "apellido", "email", "telefono", 
+                                            "direccion", "dni", "nif"]}
+        
         # Create message request
         message_request = ChannelMessageRequest(
             canal_id=canal_id,
@@ -169,7 +186,7 @@ async def process_whatsapp_message(request: Dict[str, Any] = Body(..., example=E
             chatbot_id=UUID(request["chatbot_id"]),
             mensaje=request["mensaje"],
             lead_id=UUID(request["lead_id"]) if "lead_id" in request and request["lead_id"] else None,
-            metadata=request.get("metadata"),
+            metadata=sanitized_metadata,
             phone_number=request["phone_number"]
         )
         
@@ -207,6 +224,14 @@ async def process_messenger_message(request: Dict[str, Any] = Body(..., example=
         
         canal_id = UUID(channel_result.data[0]["id"])
         
+        # Sanitizar los metadatos para no incluir información personal
+        sanitized_metadata = None
+        if "metadata" in request:
+            # Mantenemos una copia de los metadatos pero sin datos personales
+            sanitized_metadata = {k: v for k, v in request["metadata"].items() 
+                                if k not in ["nombre", "apellido", "email", "telefono", 
+                                            "direccion", "dni", "nif"]}
+        
         # Create message request
         message_request = ChannelMessageRequest(
             canal_id=canal_id,
@@ -215,7 +240,7 @@ async def process_messenger_message(request: Dict[str, Any] = Body(..., example=
             chatbot_id=UUID(request["chatbot_id"]),
             mensaje=request["mensaje"],
             lead_id=UUID(request["lead_id"]) if "lead_id" in request and request["lead_id"] else None,
-            metadata=request.get("metadata"),
+            metadata=sanitized_metadata,
             sender_id=request["sender_id"]
         )
         
@@ -253,6 +278,14 @@ async def process_telegram_message(request: Dict[str, Any] = Body(..., example=E
         
         canal_id = UUID(channel_result.data[0]["id"])
         
+        # Sanitizar los metadatos para no incluir información personal
+        sanitized_metadata = None
+        if "metadata" in request:
+            # Mantenemos una copia de los metadatos pero sin datos personales
+            sanitized_metadata = {k: v for k, v in request["metadata"].items() 
+                                if k not in ["nombre", "apellido", "email", "telefono", 
+                                            "direccion", "dni", "nif"]}
+        
         # Create message request
         message_request = ChannelMessageRequest(
             canal_id=canal_id,
@@ -261,7 +294,7 @@ async def process_telegram_message(request: Dict[str, Any] = Body(..., example=E
             chatbot_id=UUID(request["chatbot_id"]),
             mensaje=request["mensaje"],
             lead_id=UUID(request["lead_id"]) if "lead_id" in request and request["lead_id"] else None,
-            metadata=request.get("metadata"),
+            metadata=sanitized_metadata,
             chat_id=request["chat_id"]
         )
         
@@ -299,6 +332,14 @@ async def process_instagram_message(request: Dict[str, Any] = Body(..., example=
         
         canal_id = UUID(channel_result.data[0]["id"])
         
+        # Sanitizar los metadatos para no incluir información personal
+        sanitized_metadata = None
+        if "metadata" in request:
+            # Mantenemos una copia de los metadatos pero sin datos personales
+            sanitized_metadata = {k: v for k, v in request["metadata"].items() 
+                                if k not in ["nombre", "apellido", "email", "telefono", 
+                                            "direccion", "dni", "nif"]}
+        
         # Create message request
         message_request = ChannelMessageRequest(
             canal_id=canal_id,
@@ -307,7 +348,7 @@ async def process_instagram_message(request: Dict[str, Any] = Body(..., example=
             chatbot_id=UUID(request["chatbot_id"]),
             mensaje=request["mensaje"],
             lead_id=UUID(request["lead_id"]) if "lead_id" in request and request["lead_id"] else None,
-            metadata=request.get("metadata"),
+            metadata=sanitized_metadata,
             instagram_id=request["instagram_id"]
         )
         
@@ -486,7 +527,7 @@ async def process_webhook_message(
         message_data = {}
         chatbot_id = UUID(chatbot_channel["chatbot_id"])
         
-        # Process request data based on channel type
+        # Process request data based on channel type and sanitizar información personal
         if channel_type == "telegram":
             # Check if the message is directly in the request or nested inside a property
             telegram_data = request
@@ -506,14 +547,22 @@ async def process_webhook_message(
             message = telegram_data["message"]
             chat = message.get("chat", {})
             
+            # Sanitizar datos personales del chat
+            safe_chat = {k: v for k, v in chat.items() 
+                        if k not in ["first_name", "last_name", "username", "email"]}
+            
+            # Sanitizar datos personales del remitente
+            safe_from = {k: v for k, v in message.get("from", {}).items() 
+                        if k not in ["first_name", "last_name", "username", "email", "phone_number"]}
+            
             message_data = {
                 "canal_id": canal_id,
                 "canal_identificador": str(chat.get("id")),
                 "chatbot_id": chatbot_id,
                 "mensaje": message.get("text", ""),
                 "metadata": {
-                    "from": message.get("from", {}),
-                    "chat": chat,
+                    "from": safe_from,
+                    "chat": safe_chat,
                     "message_id": message.get("message_id")
                 },
                 "chat_id": str(chat.get("id"))
@@ -568,6 +617,9 @@ async def process_webhook_message(
                 postback = messaging["postback"]
                 message_text = postback.get("payload", "")
                 
+            # Sanitizar datos personales
+            safe_sender = {"id": sender.get("id")}
+            
             # Crear los datos del mensaje
             message_data = {
                 "canal_id": canal_id,
@@ -575,10 +627,9 @@ async def process_webhook_message(
                 "chatbot_id": chatbot_id,
                 "mensaje": message_text,
                 "metadata": {
-                    "sender": sender,
-                    "recipient": messaging.get("recipient", {}),
-                    "timestamp": messaging.get("timestamp"),
-                    "raw_event": messaging  # Guardar el evento completo para referencia
+                    "sender": safe_sender,
+                    "recipient": {"id": messaging.get("recipient", {}).get("id")},
+                    "timestamp": messaging.get("timestamp")
                 },
                 "sender_id": sender_id
             }
@@ -594,14 +645,20 @@ async def process_webhook_message(
             value = changes.get("value", {})
             messages = value.get("messages", [{}])[0] if value.get("messages") else {}
             
+            # Sanitizar contactos - eliminar datos personales
+            safe_contacts = []
+            if value.get("contacts"):
+                for contact in value.get("contacts", []):
+                    safe_contact = {"wa_id": contact.get("wa_id")}
+                    safe_contacts.append(safe_contact)
+            
             message_data = {
                 "canal_id": canal_id,
                 "canal_identificador": messages.get("from"),
                 "chatbot_id": chatbot_id,
                 "mensaje": messages.get("text", {}).get("body", ""),
                 "metadata": {
-                    "contacts": value.get("contacts"),
-                    "messages": value.get("messages"),
+                    "contacts": safe_contacts,
                     "message_id": messages.get("id")
                 },
                 "phone_number": messages.get("from")
@@ -616,14 +673,17 @@ async def process_webhook_message(
             sender = messaging.get("sender", {})
             message = messaging.get("message", {})
             
+            # Sanitizar datos personales
+            safe_sender = {"id": sender.get("id")}
+            
             message_data = {
                 "canal_id": canal_id,
                 "canal_identificador": sender.get("id"),
                 "chatbot_id": chatbot_id,
                 "mensaje": message.get("text", ""),
                 "metadata": {
-                    "sender": sender,
-                    "recipient": messaging.get("recipient", {}),
+                    "sender": safe_sender,
+                    "recipient": {"id": messaging.get("recipient", {}).get("id")},
                     "timestamp": messaging.get("timestamp")
                 },
                 "instagram_id": sender.get("id")
@@ -631,12 +691,18 @@ async def process_webhook_message(
             
         else:
             # Generic handler for other channels
+            # Sanitizar cualquier dato personal
+            safe_metadata = {k: v for k, v in request.items() 
+                            if k not in ["nombre", "apellido", "email", "telefono", 
+                                        "direccion", "dni", "nif", "name", "phone", 
+                                        "first_name", "last_name", "username"]}
+            
             message_data = {
                 "canal_id": canal_id,
                 "canal_identificador": request.get("sender_id", str(uuid4())),
                 "chatbot_id": chatbot_id,
                 "mensaje": request.get("text", request.get("message", "")),
-                "metadata": request
+                "metadata": safe_metadata
             }
         
         # Get empresa_id from chatbot
@@ -648,7 +714,7 @@ async def process_webhook_message(
         empresa_id = UUID(chatbot_result.data[0]["empresa_id"])
         message_data["empresa_id"] = empresa_id
         
-        # Create message request
+        # Create message request with sanitized data
         message_request = ChannelMessageRequest(**message_data)
         
         # Process message
