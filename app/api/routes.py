@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Depends, Body, Query, Path
 from typing import Dict, Any, List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 import logging
 
 # Configurar logger

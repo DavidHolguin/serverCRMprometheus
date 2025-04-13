@@ -13,10 +13,23 @@ app = FastAPI(
     debug=settings.DEBUG
 )
 
+# Lista de orígenes permitidos
+allowed_origins = [
+    "https://www.prometheuslabs.com.co",  # Dominio principal
+    "http://localhost",                  # Localhost HTTP
+    "http://localhost:3000",            # Común para React
+    "http://localhost:8000",            # Común para servidores locales
+    "http://localhost:8080",            # Otro puerto común
+    "http://127.0.0.1",                 # Localhost IP
+    "http://127.0.0.1:3000",            # Localhost IP con puerto
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:8080",
+]
+
 # Set up CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=allowed_origins,  # Orígenes específicos permitidos
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
