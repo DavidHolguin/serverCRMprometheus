@@ -213,15 +213,14 @@ class LeadEvaluationService:
         
         interaction_types_formatted = "\n".join(interaction_types_text)
         
-        # Crear prompt
+        # Crear prompt - Ya no incluimos datos personales del lead
         prompt = f"""
         Eres un evaluador experto de leads para un CRM. Tu tarea es analizar la conversación entre un usuario y un chatbot
         para determinar el valor potencial del lead, su nivel de satisfacción, y otros indicadores importantes.
         
         # Información del Lead
-        - Nombre: {lead_info.get('nombre', 'No disponible')}
-        - Email: {lead_info.get('email', 'No disponible')}
-        - Teléfono: {lead_info.get('telefono', 'No disponible')}
+        - ID: {lead_info.get('id', 'No disponible')}
+        - Canal de origen: {lead_info.get('canal_origen', 'No disponible')}
         - Score actual: {lead_info.get('score', 0)}
         
         # Conversación Completa
