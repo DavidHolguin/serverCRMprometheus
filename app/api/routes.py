@@ -13,6 +13,8 @@ from app.models.message import (
     ToggleChatbotRequest,
     ToggleChatbotResponse
 )
+# Importar los modelos de audio desde el módulo correcto
+from app.models.audio import AudioMessageRequest, AudioMessageResponse
 from app.models.conversation import ConversationHistory
 from app.services.conversation_service import conversation_service
 from app.models.examples import EXAMPLES
@@ -478,6 +480,48 @@ async def toggle_chatbot(request: ToggleChatbotRequest = Body(..., example=EXAMP
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error toggling chatbot status: {str(e)}")
+
+@api_router.post("/channels/audio", response_model=AudioMessageResponse)
+async def process_audio_message(request: AudioMessageRequest = Body(...)):
+    """
+    Procesa un mensaje de audio, lo transcribe con Whisper y genera una respuesta
+    
+    Args:
+        request: El mensaje de audio y metadatos necesarios
+        
+    Returns:
+        La respuesta generada a partir del audio transcrito
+    """
+    try:
+        from app.services.audio_service import audio_service
+        
+        # Procesar el mensaje de audio
+        result = audio_service.process_audio_message(
+            canal_id=request.canal_id,
+            canal_identificador=request.canal_identificador,
+            empresa_id=request.empresa_id,
+            chatbot_id=request.chatbot_id,
+            audio_base64=request.audio_base64,
+            formato_audio=request.formato_audio,
+            idioma=request.idioma,
+            conversacion_id=request.conversacion_id,
+            lead_id=request.lead_id,
+            metadata=request.metadata
+        )
+        
+        # Construir respuesta
+        return AudioMessageResponse(
+            mensaje_id=result["mensaje_id"],
+            conversacion_id=result["conversacion_id"],
+            audio_id=result["audio_id"],
+            transcripcion=result["transcripcion"],
+            respuesta=result["respuesta"],
+            duracion_segundos=result["duracion_segundos"],
+            idioma_detectado=result["idioma_detectado"],
+            metadata=result["metadata"]
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error procesando mensaje de audio: {str(e)}")
 
 @api_router.post("/webhook/{channel_type}", response_model=ChannelMessageResponse)
 async def process_webhook_message(

@@ -34,7 +34,7 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,  # Orígenes específicos permitidos
-    allow_origin_regex="https?://.*\.(prometheuslabs\.com\.co|railway\.app)$",  # Permitir cualquier subdominio
+    allow_origin_regex=r"https?://.*\.(prometheuslabs\.com\.co|railway\.app)$",  # Se usa r"" para raw string y evitar problemas con escape sequences
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

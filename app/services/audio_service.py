@@ -1,0 +1,327 @@
+import base64
+import os
+import tempfile
+import uuid
+from typing import Dict, Any, Optional, Tuple
+from uuid import UUID
+
+import openai
+from pydub import AudioSegment
+from pydub.utils import mediainfo
+
+from app.core.config import settings
+from app.db.supabase_client import supabase
+from app.services.conversation_service import conversation_service
+
+
+class AudioService:
+    """Servicio para manejar mensajes de audio, transcripción y almacenamiento"""
+    
+    def __init__(self):
+        """Inicializa el servicio de audio"""
+        # Configurar la API key de OpenAI
+        openai.api_key = settings.OPENAI_API_KEY
+        # Bucket de Supabase para almacenar audios
+        self.audio_bucket = "mensajes-audio"
+        # Asegurarse de que el bucket exista
+        self._ensure_bucket_exists()
+    
+    def _ensure_bucket_exists(self) -> None:
+        """Asegura que el bucket para audios exista en Supabase Storage"""
+        try:
+            # Intentar listar el bucket para ver si existe
+            supabase.storage.get_bucket(self.audio_bucket)
+        except Exception:
+            try:
+                # Si no existe, crear el bucket con acceso público
+                # Lo configuramos como público para permitir acceso desde el frontend sin autenticación
+                supabase.storage.create_bucket(
+                    self.audio_bucket, 
+                    options={"public": True}  # Bucket público para permitir acceso a leads no autenticados
+                )
+            except Exception as e:
+                print(f"Error al crear el bucket {self.audio_bucket}: {str(e)}")
+    
+    def _decode_and_save_audio(self, audio_base64: str, formato: str) -> Tuple[str, str, int, float]:
+        """
+        Decodifica el audio en base64 y lo guarda temporalmente
+        
+        Args:
+            audio_base64: Audio codificado en base64
+            formato: Formato del audio (mp3, wav, etc.)
+            
+        Returns:
+            Tuple con la ruta temporal del archivo, el formato normalizado, 
+            tamaño en bytes y duración en segundos
+        """
+        try:
+            # Decodificar el contenido base64
+            audio_data = base64.b64decode(audio_base64)
+            
+            # Crear archivo temporal con la extensión correcta
+            with tempfile.NamedTemporaryFile(delete=False, suffix=f".{formato.lower()}") as temp_file:
+                temp_file.write(audio_data)
+                temp_path = temp_file.name
+            
+            # Obtener información del archivo de audio
+            audio_info = mediainfo(temp_path)
+            
+            # Calcular tamaño y duración
+            file_size = os.path.getsize(temp_path)
+            duration = float(audio_info.get('duration', 0))
+            
+            # Normalizar formato
+            formato_normalizado = audio_info.get('format_name', formato).split(',')[0]
+            
+            return temp_path, formato_normalizado, file_size, duration
+        
+        except Exception as e:
+            raise ValueError(f"Error al decodificar o guardar el audio: {str(e)}")
+    
+    def _upload_to_supabase(self, file_path: str, conversacion_id: UUID, mensaje_id: UUID) -> str:
+        """
+        Sube el archivo de audio a Supabase Storage
+        
+        Args:
+            file_path: Ruta al archivo temporal
+            conversacion_id: ID de la conversación
+            mensaje_id: ID del mensaje
+            
+        Returns:
+            URL del archivo en Supabase Storage
+        """
+        try:
+            # Generar un nombre de archivo único
+            file_name = f"{conversacion_id}/{mensaje_id}_{uuid.uuid4()}{os.path.splitext(file_path)[1]}"
+            
+            # Leer el contenido del archivo
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Subir el archivo al bucket
+            result = supabase.storage.from_(self.audio_bucket).upload(
+                file_name,
+                file_content
+            )
+            
+            # Generar URL pública para el archivo
+            file_url = supabase.storage.from_(self.audio_bucket).get_public_url(file_name)
+            
+            return file_url
+            
+        except Exception as e:
+            raise ValueError(f"Error al subir el audio a Supabase: {str(e)}")
+        finally:
+            # Eliminar el archivo temporal
+            if os.path.exists(file_path):
+                os.remove(file_path)
+    
+    def transcribe_audio(self, file_path: str, idioma: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Transcribe el audio utilizando OpenAI Whisper
+        
+        Args:
+            file_path: Ruta al archivo de audio
+            idioma: Código de idioma para la transcripción (opcional)
+            
+        Returns:
+            Diccionario con la transcripción y metadatos
+        """
+        try:
+            # Abrir el archivo de audio
+            with open(file_path, "rb") as audio_file:
+                # Configurar los parámetros para la transcripción
+                transcription_params = {
+                    "model": "whisper-1",
+                    "file": audio_file,
+                    "response_format": "verbose_json"
+                }
+                
+                # Añadir el idioma si se proporciona
+                if idioma:
+                    transcription_params["language"] = idioma
+                
+                # Realizar la transcripción
+                transcription = openai.Audio.transcribe(**transcription_params)
+                
+                return {
+                    "texto": transcription.get("text", ""),
+                    "idioma": transcription.get("language", ""),
+                    "duracion": transcription.get("duration", 0),
+                    "confianza": transcription.get("confidence", 0),
+                    "segmentos": transcription.get("segments", [])
+                }
+                
+        except Exception as e:
+            raise ValueError(f"Error al transcribir el audio: {str(e)}")
+
+    def save_audio_message(self, 
+                         conversacion_id: UUID, 
+                         mensaje_id: UUID, 
+                         audio_url: str,
+                         transcripcion: str,
+                         metadata: Dict[str, Any]) -> UUID:
+        """
+        Guarda la información del mensaje de audio en la base de datos
+        
+        Args:
+            conversacion_id: ID de la conversación
+            mensaje_id: ID del mensaje
+            audio_url: URL del archivo de audio en Supabase
+            transcripcion: Texto transcrito del audio
+            metadata: Metadatos del audio y la transcripción
+            
+        Returns:
+            ID del registro de audio creado
+        """
+        try:
+            # Preparar los datos para insertar en la base de datos
+            audio_data = {
+                "mensaje_id": str(mensaje_id),
+                "conversacion_id": str(conversacion_id),
+                "archivo_url": audio_url,
+                "transcripcion": transcripcion,
+                "modelo_transcripcion": metadata.get("modelo", "whisper-1"),
+                "idioma_detectado": metadata.get("idioma", ""),
+                "duracion_segundos": metadata.get("duracion", 0),
+                "tamano_bytes": metadata.get("tamano", 0),
+                "formato": metadata.get("formato", ""),
+                "metadata": {
+                    "confianza": metadata.get("confianza", 0),
+                    "segmentos": metadata.get("segmentos", []),
+                    "adicional": metadata.get("adicional", {})
+                }
+            }
+            
+            # Insertar en la base de datos
+            result = supabase.table("mensajes_audio").insert(audio_data).execute()
+            
+            # Verificar que se haya creado correctamente
+            if not result.data or len(result.data) == 0:
+                raise ValueError("Error al guardar el mensaje de audio en la base de datos")
+            
+            # Devolver el ID del registro creado
+            return UUID(result.data[0]["id"])
+            
+        except Exception as e:
+            raise ValueError(f"Error al guardar el mensaje de audio: {str(e)}")
+
+    def process_audio_message(self,
+                            canal_id: UUID,
+                            canal_identificador: str,
+                            empresa_id: UUID,
+                            chatbot_id: UUID,
+                            audio_base64: str,
+                            formato_audio: str,
+                            idioma: Optional[str] = None,
+                            conversacion_id: Optional[UUID] = None,
+                            lead_id: Optional[UUID] = None,
+                            metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Procesa un mensaje de audio completo: decodifica, transcribe, guarda y responde
+        
+        Args:
+            canal_id: ID del canal
+            canal_identificador: Identificador del canal
+            empresa_id: ID de la empresa
+            chatbot_id: ID del chatbot
+            audio_base64: Audio codificado en base64
+            formato_audio: Formato del audio
+            idioma: Código del idioma para la transcripción
+            conversacion_id: ID de la conversación existente (opcional)
+            lead_id: ID del lead existente (opcional)
+            metadata: Metadatos adicionales (opcional)
+            
+        Returns:
+            Diccionario con la información de la respuesta
+        """
+        try:
+            # 1. Decodificar y guardar temporalmente el audio
+            temp_path, formato, tamano, duracion = self._decode_and_save_audio(audio_base64, formato_audio)
+            
+            # 2. Transcribir el audio
+            transcripcion_result = self.transcribe_audio(temp_path, idioma)
+            transcripcion_texto = transcripcion_result["texto"]
+            
+            # Preparar metadatos sanitizados (sin datos personales)
+            sanitized_metadata = {}
+            if metadata:
+                # Filtrar datos personales
+                sanitized_metadata = {k: v for k, v in metadata.items() 
+                              if k not in ["nombre", "apellido", "email", "telefono", 
+                                          "direccion", "dni", "nif"]}
+            
+            # Añadir información del audio a los metadatos
+            sanitized_metadata.update({
+                "tipo_mensaje": "audio",
+                "formato_audio": formato,
+                "duracion_audio": duracion,
+                "tamano_audio": tamano,
+                "idioma_detectado": transcripcion_result["idioma"]
+            })
+            
+            # 3. Procesar el mensaje de texto transcrito usando el servicio de conversación
+            conversation_result = conversation_service.process_channel_message(
+                canal_id=canal_id,
+                canal_identificador=canal_identificador,
+                empresa_id=empresa_id,
+                chatbot_id=chatbot_id,
+                mensaje=transcripcion_texto,
+                lead_id=lead_id,
+                conversacion_id=conversacion_id,
+                metadata=sanitized_metadata
+            )
+            
+            # 4. Subir el audio a Supabase
+            audio_url = self._upload_to_supabase(
+                temp_path, 
+                conversation_result["conversacion_id"], 
+                conversation_result["mensaje_id"]
+            )
+            
+            # 5. Guardar la información del audio en la base de datos
+            audio_metadata = {
+                "modelo": "whisper-1",
+                "idioma": transcripcion_result["idioma"],
+                "duracion": duracion,
+                "tamano": tamano,
+                "formato": formato,
+                "confianza": transcripcion_result["confianza"],
+                "segmentos": transcripcion_result["segmentos"],
+                "adicional": sanitized_metadata
+            }
+            
+            audio_id = self.save_audio_message(
+                conversacion_id=conversation_result["conversacion_id"],
+                mensaje_id=conversation_result["mensaje_id"],
+                audio_url=audio_url,
+                transcripcion=transcripcion_texto,
+                metadata=audio_metadata
+            )
+            
+            # 6. Preparar respuesta
+            return {
+                "mensaje_id": conversation_result["mensaje_id"],
+                "conversacion_id": conversation_result["conversacion_id"],
+                "audio_id": audio_id,
+                "transcripcion": transcripcion_texto,
+                "respuesta": conversation_result["respuesta"],
+                "duracion_segundos": duracion,
+                "idioma_detectado": transcripcion_result["idioma"],
+                "metadata": {
+                    **conversation_result["metadata"],
+                    "audio": {
+                        "url": audio_url,
+                        "formato": formato,
+                        "tamano_bytes": tamano,
+                        "confianza_transcripcion": transcripcion_result["confianza"]
+                    }
+                }
+            }
+            
+        except Exception as e:
+            raise ValueError(f"Error al procesar mensaje de audio: {str(e)}")
+
+
+# Crear instancia singleton
+audio_service = AudioService()
