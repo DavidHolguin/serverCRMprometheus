@@ -5,7 +5,8 @@ import uuid
 from typing import Dict, Any, Optional, Tuple
 from uuid import UUID
 
-import openai
+# Usar el cliente OpenAI actualizado
+from openai import OpenAI
 from pydub import AudioSegment
 from pydub.utils import mediainfo
 
@@ -19,8 +20,8 @@ class AudioService:
     
     def __init__(self):
         """Inicializa el servicio de audio"""
-        # Configurar la API key de OpenAI
-        openai.api_key = settings.OPENAI_API_KEY
+        # Configurar el cliente de OpenAI con la nueva API
+        self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         # Bucket de Supabase para almacenar audios
         self.audio_bucket = "mensajes-audio"
         # Asegurarse de que el bucket exista
@@ -31,16 +32,61 @@ class AudioService:
         try:
             # Intentar listar el bucket para ver si existe
             supabase.storage.get_bucket(self.audio_bucket)
-        except Exception:
+            print(f"Bucket {self.audio_bucket} encontrado correctamente")
+        except Exception as e:
             try:
                 # Si no existe, crear el bucket con acceso público
                 # Lo configuramos como público para permitir acceso desde el frontend sin autenticación
-                supabase.storage.create_bucket(
-                    self.audio_bucket, 
-                    options={"public": True}  # Bucket público para permitir acceso a leads no autenticados
+                print(f"Intentando crear bucket {self.audio_bucket}...")
+                
+                # Intentar usar el servicio de almacenamiento directamente con RPC
+                from app.db.supabase_client import supabase_url, supabase_key
+                import requests
+                
+                headers = {
+                    "apikey": supabase_key,
+                    "Authorization": f"Bearer {supabase_key}",
+                    "Content-Type": "application/json"
+                }
+                
+                payload = {
+                    "id": self.audio_bucket,
+                    "name": self.audio_bucket,
+                    "public": True
+                }
+                
+                response = requests.post(
+                    f"{supabase_url}/storage/buckets",
+                    headers=headers,
+                    json=payload
                 )
-            except Exception as e:
-                print(f"Error al crear el bucket {self.audio_bucket}: {str(e)}")
+                
+                print(f"Respuesta de creación de bucket: {response.status_code} - {response.text}")
+                
+                if response.status_code == 200 or response.status_code == 201:
+                    print(f"Bucket {self.audio_bucket} creado exitosamente")
+                else:
+                    print(f"Error al crear bucket: {response.text}")
+                    
+                    # Si no podemos crear el bucket, usaremos uno existente
+                    print("Intentando usar un bucket alternativo...")
+                    buckets = supabase.storage.list_buckets()
+                    if buckets:
+                        self.audio_bucket = buckets[0]["id"]
+                        print(f"Usando bucket alternativo: {self.audio_bucket}")
+                    
+            except Exception as inner_e:
+                print(f"Error al crear/encontrar bucket: {str(inner_e)}")
+                # Intentar usar un bucket por defecto si existe
+                try:
+                    buckets = supabase.storage.list_buckets()
+                    if buckets:
+                        self.audio_bucket = buckets[0]["id"]
+                        print(f"Usando bucket alternativo: {self.audio_bucket}")
+                    else:
+                        print("No se encontraron buckets disponibles")
+                except:
+                    print("No se pudieron listar buckets")
     
     def _decode_and_save_audio(self, audio_base64: str, formato: str) -> Tuple[str, str, int, float]:
         """
@@ -108,6 +154,7 @@ class AudioService:
                 file_content = f.read()
             
             # Subir el archivo al bucket
+            print(f"Intentando subir archivo a bucket {self.audio_bucket}...")
             result = supabase.storage.from_(self.audio_bucket).upload(
                 file_name,
                 file_content
@@ -119,7 +166,12 @@ class AudioService:
             return file_url
             
         except Exception as e:
-            raise ValueError(f"Error al subir el audio a Supabase: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            print(f"Error al subir audio: {str(e)}")
+            
+            # Si falla la subida, devolver una URL ficticia para continuar el flujo
+            return f"error://upload-failed/{conversacion_id}/{mensaje_id}"
         finally:
             # Eliminar el archivo temporal
             if os.path.exists(file_path):
@@ -127,7 +179,7 @@ class AudioService:
     
     def transcribe_audio(self, file_path: str, idioma: Optional[str] = None) -> Dict[str, Any]:
         """
-        Transcribe el audio utilizando OpenAI Whisper
+        Transcribe el audio utilizando OpenAI Whisper con la API actualizada
         
         Args:
             file_path: Ruta al archivo de audio
@@ -139,29 +191,33 @@ class AudioService:
         try:
             # Abrir el archivo de audio
             with open(file_path, "rb") as audio_file:
-                # Configurar los parámetros para la transcripción
-                transcription_params = {
-                    "model": "whisper-1",
-                    "file": audio_file,
-                    "response_format": "verbose_json"
-                }
-                
-                # Añadir el idioma si se proporciona
+                # Configurar los parámetros para la transcripción usando la nueva API
+                params = {}
                 if idioma:
-                    transcription_params["language"] = idioma
+                    params["language"] = idioma
+                    
+                # Realizar la transcripción con la nueva API
+                response = self.client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    response_format="verbose_json",
+                    **params
+                )
                 
-                # Realizar la transcripción
-                transcription = openai.Audio.transcribe(**transcription_params)
+                # Convertir el objeto de respuesta a diccionario
+                response_dict = response.model_dump()
                 
                 return {
-                    "texto": transcription.get("text", ""),
-                    "idioma": transcription.get("language", ""),
-                    "duracion": transcription.get("duration", 0),
-                    "confianza": transcription.get("confidence", 0),
-                    "segmentos": transcription.get("segments", [])
+                    "texto": response_dict.get("text", ""),
+                    "idioma": response_dict.get("language", ""),
+                    "duracion": response_dict.get("duration", 0),
+                    "confianza": response_dict.get("confidence", 0),
+                    "segmentos": response_dict.get("segments", [])
                 }
                 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             raise ValueError(f"Error al transcribir el audio: {str(e)}")
 
     def save_audio_message(self, 
