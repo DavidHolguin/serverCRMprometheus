@@ -293,7 +293,7 @@ class AudioService:
             audio_base64: Audio codificado en base64
             formato_audio: Formato del audio
             idioma: Código del idioma para la transcripción
-            conversacion_id: ID de la conversación existente (opcional)
+            conversacion_id: ID de la conversación existente (opcional, no se usa directamente en process_channel_message)
             lead_id: ID del lead existente (opcional)
             metadata: Metadatos adicionales (opcional)
             
@@ -326,6 +326,7 @@ class AudioService:
             })
             
             # 3. Procesar el mensaje de texto transcrito usando el servicio de conversación
+            # Nota: No pasamos conversacion_id aquí porque el método no lo acepta
             conversation_result = conversation_service.process_channel_message(
                 canal_id=canal_id,
                 canal_identificador=canal_identificador,
@@ -333,14 +334,16 @@ class AudioService:
                 chatbot_id=chatbot_id,
                 mensaje=transcripcion_texto,
                 lead_id=lead_id,
-                conversacion_id=conversacion_id,
                 metadata=sanitized_metadata
             )
+            
+            # Obtener el conversation_id del resultado
+            result_conversation_id = UUID(conversation_result["conversacion_id"])
             
             # 4. Subir el audio a Supabase
             audio_url = self._upload_to_supabase(
                 temp_path, 
-                conversation_result["conversacion_id"], 
+                result_conversation_id, 
                 conversation_result["mensaje_id"]
             )
             
@@ -357,7 +360,7 @@ class AudioService:
             }
             
             audio_id = self.save_audio_message(
-                conversacion_id=conversation_result["conversacion_id"],
+                conversacion_id=result_conversation_id,
                 mensaje_id=conversation_result["mensaje_id"],
                 audio_url=audio_url,
                 transcripcion=transcripcion_texto,
@@ -367,7 +370,7 @@ class AudioService:
             # 6. Preparar respuesta
             return {
                 "mensaje_id": conversation_result["mensaje_id"],
-                "conversacion_id": conversation_result["conversacion_id"],
+                "conversacion_id": result_conversation_id,
                 "audio_id": audio_id,
                 "transcripcion": transcripcion_texto,
                 "respuesta": conversation_result["respuesta"],
@@ -385,6 +388,8 @@ class AudioService:
             }
             
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             raise ValueError(f"Error al procesar mensaje de audio: {str(e)}")
 
 
