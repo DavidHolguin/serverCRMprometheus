@@ -494,11 +494,26 @@ async def process_audio_message(request: AudioMessageRequest = Body(...)):
     """
     try:
         from app.services.audio_service import audio_service
+        from app.db.supabase_client import supabase
         
+        # Si no se proporciona canal_id, buscamos el canal web por defecto
+        canal_id = request.canal_id
+        if canal_id is None:
+            channel_result = supabase.table("canales").select("id").eq("tipo", "web").limit(1).execute()
+            if not channel_result.data or len(channel_result.data) == 0:
+                raise HTTPException(status_code=404, detail="Web channel not found")
+            canal_id = UUID(channel_result.data[0]["id"])
+        
+        # Si no se proporciona canal_identificador, usamos un valor predeterminado
+        canal_identificador = request.canal_identificador
+        if canal_identificador is None:
+            # Usar un identificador basado en la sesión o generar uno nuevo
+            canal_identificador = f"audio_session_{uuid4()}"
+            
         # Procesar el mensaje de audio
         result = audio_service.process_audio_message(
-            canal_id=request.canal_id,
-            canal_identificador=request.canal_identificador,
+            canal_id=canal_id,
+            canal_identificador=canal_identificador,
             empresa_id=request.empresa_id,
             chatbot_id=request.chatbot_id,
             audio_base64=request.audio_base64,

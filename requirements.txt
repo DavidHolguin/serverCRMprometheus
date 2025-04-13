@@ -10,3 +10,6 @@ supabase==1.0.4
 python-multipart==0.0.6
 httpx==0.25.1
 requests==2.31.0
+# Dependencias para procesamiento de audio
+pydub==0.25.1
+numpy==1.26.0
