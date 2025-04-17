@@ -112,10 +112,28 @@ class ChannelService:
     def _send_whatsapp_message(self, config: Dict[str, Any], phone_number: str, message: str) -> Dict[str, Any]:
         """Send message to WhatsApp"""
         try:
+            # Intentar obtener el token de acceso de la configuración del canal
             access_token = config.get("access_token")
             phone_number_id = config.get("phone_number_id")
             api_version = config.get("api_version", "v17.0")
             
+            # Verificar token de configuración del canal
+            if not access_token:
+                print("No se encontró access_token en la configuración del canal, intentando usar token global...")
+                # Intentar usar token de configuración global (settings)
+                if hasattr(settings, 'WHATSAPP_ACCESS_TOKEN'):
+                    access_token = settings.WHATSAPP_ACCESS_TOKEN
+                    print("Usando token de acceso global de configuración")
+            
+            # Verificar phone_number_id de configuración del canal
+            if not phone_number_id:
+                print("No se encontró phone_number_id en la configuración del canal, intentando usar ID global...")
+                # Intentar usar phone_number_id de configuración global
+                if hasattr(settings, 'WHATSAPP_PHONE_NUMBER_ID'):
+                    phone_number_id = settings.WHATSAPP_PHONE_NUMBER_ID
+                    print("Usando phone_number_id global de configuración")
+            
+            # Verificar si tenemos los valores necesarios para la API
             if not access_token or not phone_number_id:
                 error_msg = "Error en configuración de WhatsApp: Faltan access_token o phone_number_id"
                 print(error_msg)
@@ -123,6 +141,7 @@ class ChannelService:
             
             # Log para depuración
             print(f"Enviando mensaje a WhatsApp: número={phone_number}, phone_number_id={phone_number_id}")
+            print(f"Access token (primeros 10 caracteres): {access_token[:10]}...")
             
             # Clean phone number (remove + if present)
             if phone_number.startswith("+"):
@@ -161,6 +180,13 @@ class ChannelService:
             # Verificar el código de estado
             if response.status_code != 200:
                 print(f"Error al enviar mensaje a WhatsApp: {response.status_code}")
+                error_message = response_data.get("error", {}).get("message", "Unknown error")
+                print(f"Mensaje de error: {error_message}")
+                
+                # Verificar si es un error de token
+                if response.status_code == 401 or (response.status_code == 400 and "token" in error_message.lower()):
+                    print("Error de autenticación. Verifica que el token sea válido y esté vigente.")
+                
                 return {
                     "success": False, 
                     "status_code": response.status_code, 
