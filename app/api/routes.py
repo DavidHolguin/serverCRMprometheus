@@ -191,14 +191,22 @@ async def handle_whatsapp_webhook(request: Request):
                         canal_id = UUID(channel_result.data[0]["id"])
 
                         # Buscar configuración de chatbot activa para este canal
-                        # Asumimos una config activa por canal WhatsApp para simplificar
-                        chatbot_channel_result = supabase.table("chatbot_canales").select("chatbot_id, empresa_id").eq("canal_id", str(canal_id)).eq("is_active", True).limit(1).execute()
+                        # CORREGIDO: Eliminamos empresa_id que no existe en la tabla
+                        chatbot_channel_result = supabase.table("chatbot_canales").select("chatbot_id").eq("canal_id", str(canal_id)).eq("is_active", True).limit(1).execute()
                         if not chatbot_channel_result.data:
                             logger.warning(f"No se encontró configuración de chatbot activa para el canal WhatsApp (ID: {canal_id}).")
                             continue
-                        chatbot_config = chatbot_channel_result.data[0]
-                        chatbot_id = UUID(chatbot_config["chatbot_id"])
-                        empresa_id = UUID(chatbot_config["empresa_id"])
+                        
+                        chatbot_id = UUID(chatbot_channel_result.data[0]["chatbot_id"])
+                        
+                        # Obtener la empresa_id desde la tabla de chatbots usando el chatbot_id
+                        chatbot_result = supabase.table("chatbots").select("empresa_id").eq("id", str(chatbot_id)).limit(1).execute()
+                        if not chatbot_result.data:
+                            logger.warning(f"No se encontró información del chatbot (ID: {chatbot_id}).")
+                            continue
+                        
+                        empresa_id = UUID(chatbot_result.data[0]["empresa_id"])
+                        logger.info(f"Procesando mensaje para empresa_id: {empresa_id}, chatbot_id: {chatbot_id}")
 
                         # --- Fin Lógica de Lead y Canal ---
 
