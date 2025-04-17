@@ -161,16 +161,8 @@ class ConversationService:
             
             # Verificar si el chatbot está activo para esta conversación
             chatbot_activo = conversation.get("chatbot_activo", True)
-            if not chatbot_activo:
-                print(f"Chatbot está desactivado para la conversación {conversation_id}. No se generará respuesta automática.")
-                return {
-                    "mensaje_id": None,
-                    "conversacion_id": str(conversation_id),
-                    "respuesta": None,
-                    "metadata": {"chatbot_disabled": True}
-                }
             
-            # Guardar mensaje sanitizado
+            # Guardar mensaje sanitizado (independientemente de si el chatbot está activo)
             user_message = langchain_service.save_message(conversation_id, sanitized_mensaje, is_user=True)
             
             # Si hay metadata, la sanitizamos antes de guardarla
@@ -181,67 +173,59 @@ class ConversationService:
                 if user_message.get("id"):
                     supabase.table("mensajes").update({"metadata": safe_metadata}).eq("id", user_message["id"]).execute()
             
-            # Generar respuesta con el mensaje sanitizado
-            response = langchain_service.generate_response(conversation_id, chatbot_id, empresa_id, sanitized_mensaje)
+            # Inicializar variables de respuesta
+            response = ""
+            bot_message = None
+            metadata_response = {"user_message_id": user_message["id"]}
             
-            # Save chatbot response
-            bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
+            # Solo generar respuesta si el chatbot está activo
+            if chatbot_activo:
+                # Generar respuesta con el mensaje sanitizado
+                response = langchain_service.generate_response(conversation_id, chatbot_id, empresa_id, sanitized_mensaje)
+                
+                # Guardar respuesta del chatbot solo si no está vacía (si el chatbot está activo)
+                if response:
+                    bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
+                    
+                    # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
+                    from app.services.channel_service import channel_service
+                    try:
+                        # Agregamos log para debug
+                        print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
+                        
+                        channel_response = channel_service.send_message_to_channel(
+                            conversation_id=conversation_id,
+                            message=response,
+                            metadata={
+                                "origin": "chatbot",
+                                "message_id": bot_message["id"],
+                                "chatbot_id": str(chatbot_id)
+                            }
+                        )
+                        
+                        # Agregar la información de envío a los metadatos del mensaje
+                        supabase.table("mensajes").update({
+                            "metadata": {
+                                **(bot_message.get("metadata") or {}),
+                                "channel_delivery": channel_response
+                            }
+                        }).eq("id", bot_message["id"]).execute()
+                        
+                        metadata_response["channel_delivery"] = channel_response
+                        
+                    except Exception as channel_error:
+                        print(f"Error al enviar mensaje al canal: {channel_error}")
+                        metadata_response["channel_error"] = str(channel_error)
+            else:
+                metadata_response["chatbot_disabled"] = True
             
-            # Evaluar el mensaje del usuario para determinar el valor del lead
-            try:
-                evaluation = lead_evaluation_service.evaluate_message(
-                    lead_id=lead_id,
-                    conversacion_id=conversation_id,
-                    mensaje_id=UUID(user_message["id"]),
-                    empresa_id=empresa_id
-                )
-                
-                metadata_response = {
-                    "user_message_id": user_message["id"],
-                    "evaluation": {
-                        "id": evaluation["id"],
-                        "score_potencial": evaluation["score_potencial"],
-                        "score_satisfaccion": evaluation["score_satisfaccion"]
-                    }
-                }
-            except Exception as eval_error:
-                print(f"Error al evaluar el mensaje: {eval_error}")
-                metadata_response = {
-                    "user_message_id": user_message["id"]
-                }
+            # Iniciar proceso de evaluación en segundo plano (sin esperar el resultado)
+            # Esto permite que la evaluación ocurra en paralelo con la respuesta al usuario
+            self._start_async_evaluation(lead_id, conversation_id, UUID(user_message["id"]), empresa_id)
             
-            # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
-            from app.services.channel_service import channel_service
-            try:
-                # Agregamos log para debug
-                print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
-                
-                channel_response = channel_service.send_message_to_channel(
-                    conversation_id=conversation_id,
-                    message=response,
-                    metadata={
-                        "origin": "chatbot",
-                        "message_id": bot_message["id"],
-                        "chatbot_id": str(chatbot_id)
-                    }
-                )
-                
-                # Agregar la información de envío a los metadatos del mensaje
-                supabase.table("mensajes").update({
-                    "metadata": {
-                        **(bot_message.get("metadata") or {}),
-                        "channel_delivery": channel_response
-                    }
-                }).eq("id", bot_message["id"]).execute()
-                
-                metadata_response["channel_delivery"] = channel_response
-                
-            except Exception as channel_error:
-                print(f"Error al enviar mensaje al canal: {channel_error}")
-                metadata_response["channel_error"] = str(channel_error)
-            
+            # Respuesta inmediata sin esperar evaluación
             return {
-                "mensaje_id": bot_message["id"],
+                "mensaje_id": bot_message["id"] if bot_message else None,
                 "conversacion_id": str(conversation_id),
                 "respuesta": response,
                 "metadata": metadata_response
@@ -249,6 +233,43 @@ class ConversationService:
         except Exception as e:
             print(f"Error in process_channel_message: {e}")
             raise
+    
+    def _start_async_evaluation(self, lead_id: UUID, conversacion_id: UUID, mensaje_id: UUID, empresa_id: UUID) -> None:
+        """
+        Inicia la evaluación de un mensaje en segundo plano
+        
+        Args:
+            lead_id: El ID del lead
+            conversacion_id: El ID de la conversación
+            mensaje_id: El ID del mensaje a evaluar
+            empresa_id: El ID de la empresa
+        """
+        try:
+            # En un entorno de producción, aquí se enviaría la tarea a un worker o cola
+            # Para esta implementación, ejecutamos directamente pero sin esperar el resultado
+            from app.services.lead_evaluation_service import lead_evaluation_service
+            from threading import Thread
+            
+            # Crear una función que ejecute la evaluación
+            def evaluate_in_background():
+                try:
+                    lead_evaluation_service.evaluate_message(
+                        lead_id=lead_id,
+                        conversacion_id=conversacion_id,
+                        mensaje_id=mensaje_id,
+                        empresa_id=empresa_id
+                    )
+                except Exception as eval_error:
+                    print(f"Error en evaluación asíncrona: {eval_error}")
+            
+            # Iniciar la evaluación en un hilo separado
+            evaluation_thread = Thread(target=evaluate_in_background)
+            evaluation_thread.daemon = True  # El hilo no bloqueará la finalización del programa
+            evaluation_thread.start()
+            
+        except Exception as e:
+            print(f"Error al iniciar evaluación asíncrona: {e}")
+            # No propagamos la excepción para no bloquear la respuesta
 
     def sanitize_message(self, mensaje: str) -> str:
         """

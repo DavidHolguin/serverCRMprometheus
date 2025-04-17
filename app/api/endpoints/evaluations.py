@@ -279,3 +279,72 @@ async def get_dashboard_stats(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener estadísticas: {str(e)}")
+
+@router.get("/message-evaluation/{mensaje_id}", response_model=Dict[str, Any])
+async def get_message_evaluation(
+    mensaje_id: UUID,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """
+    Obtiene el resultado de la evaluación de un mensaje específico
+    """
+    try:
+        # Obtener el mensaje para verificar permisos
+        message_result = supabase.table("mensajes").select("*").eq("id", str(mensaje_id)).limit(1).execute()
+        
+        if not message_result.data or len(message_result.data) == 0:
+            raise HTTPException(status_code=404, detail=f"Mensaje con ID {mensaje_id} no encontrado")
+        
+        message = message_result.data[0]
+        conversacion_id = message["conversacion_id"]
+        
+        # Obtener información de la conversación
+        conv_result = supabase.table("conversaciones").select("*").eq("id", conversacion_id).limit(1).execute()
+        
+        if not conv_result.data or len(conv_result.data) == 0:
+            raise HTTPException(status_code=404, detail=f"Conversación con ID {conversacion_id} no encontrada")
+        
+        conversation = conv_result.data[0]
+        
+        # Verificar que el usuario tenga acceso a esta conversación (mismo empresa_id)
+        lead_result = supabase.table("leads").select("empresa_id").eq("id", conversation["lead_id"]).limit(1).execute()
+        
+        if not lead_result.data or len(lead_result.data) == 0:
+            raise HTTPException(status_code=404, detail=f"Lead con ID {conversation['lead_id']} no encontrado")
+        
+        if str(current_user["empresa_id"]) != str(lead_result.data[0]["empresa_id"]):
+            raise HTTPException(status_code=403, detail="No tienes permiso para acceder a esta información")
+        
+        # Buscar la evaluación del mensaje
+        eval_result = supabase.table("evaluaciones_llm").select("*").eq("mensaje_id", str(mensaje_id)).limit(1).execute()
+        
+        if not eval_result.data or len(eval_result.data) == 0:
+            # La evaluación no existe o aún está en proceso
+            return {
+                "success": True,
+                "evaluation_found": False,
+                "message": "La evaluación aún no está disponible o está en proceso"
+            }
+        
+        evaluation = eval_result.data[0]
+        
+        return {
+            "success": True,
+            "evaluation_found": True,
+            "data": {
+                "id": evaluation["id"],
+                "mensaje_id": str(mensaje_id),
+                "lead_id": evaluation["lead_id"],
+                "conversacion_id": evaluation["conversacion_id"],
+                "fecha_evaluacion": evaluation["fecha_evaluacion"],
+                "score_potencial": evaluation["score_potencial"],
+                "score_satisfaccion": evaluation["score_satisfaccion"],
+                "interes_productos": evaluation["interes_productos"],
+                "comentario": evaluation["comentario"],
+                "palabras_clave": evaluation["palabras_clave"]
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener la evaluación: {str(e)}")

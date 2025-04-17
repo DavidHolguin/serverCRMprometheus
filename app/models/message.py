@@ -71,3 +71,19 @@ class ToggleChatbotResponse(BaseModel):
     conversation_id: str = Field(..., description="ID of the conversation")
     chatbot_activo: bool = Field(..., description="Current chatbot active status")
     data: Dict[str, Any] = Field(..., description="Full conversation data")
+
+class MessageEvaluationRequest(BaseModel):
+    """Model for asynchronous message evaluation requests"""
+    mensaje_id: UUID4 = Field(..., description="ID of the message to evaluate")
+    conversacion_id: UUID4 = Field(..., description="ID of the conversation")
+    lead_id: UUID4 = Field(..., description="ID of the lead")
+    empresa_id: UUID4 = Field(..., description="ID of the company")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata for the evaluation")
+
+class MessageEvaluationResponse(BaseModel):
+    """Model for message evaluation responses"""
+    evaluation_id: Optional[UUID4] = Field(None, description="ID of the created evaluation (if successful)")
+    mensaje_id: UUID4 = Field(..., description="ID of the evaluated message")
+    success: bool = Field(..., description="Whether the evaluation was successful")
+    error: Optional[str] = Field(None, description="Error message if evaluation failed")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata from the evaluation")
