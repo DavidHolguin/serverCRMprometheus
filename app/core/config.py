@@ -36,6 +36,7 @@ class Settings(BaseModel):
     WHATSAPP_API_VERSION: str = Field(default_factory=lambda: os.getenv("WHATSAPP_API_VERSION", "v17.0"))
     WHATSAPP_BUSINESS_PHONE: str = Field(default_factory=lambda: os.getenv("WHATSAPP_BUSINESS_PHONE", ""))
     WHATSAPP_WABA_ID: str = Field(default_factory=lambda: os.getenv("WHATSAPP_WABA_ID", ""))
+    WHATSAPP_APP_ID: str = Field(default_factory=lambda: os.getenv("WHATSAPP_APP_ID", ""))
     
     # Default LLM Settings
     DEFAULT_MODEL: str = "gpt-4o-mini"

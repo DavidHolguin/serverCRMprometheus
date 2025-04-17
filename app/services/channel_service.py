@@ -116,8 +116,9 @@ class ChannelService:
             access_token = config.get("access_token")
             phone_number_id = config.get("phone_number_id")
             api_version = config.get("api_version")
-            waba_id = settings.WHATSAPP_WABA_ID  # Definir waba_id al inicio para usarlo en todo el método
+            waba_id = settings.WHATSAPP_WABA_ID
             business_id = settings.WHATSAPP_BUSINESS_PHONE
+            app_id = config.get("app_id")  # Intentar obtener app_id de la configuración
             
             # Si no hay configuración en el canal, usar las variables globales de configuración
             if not access_token:
@@ -127,6 +128,11 @@ class ChannelService:
             if not api_version:
                 api_version = settings.WHATSAPP_API_VERSION
                 print(f"Usando versión de API global: {api_version}")
+                
+            # Intentar obtener app_id de configuración global si no está en config
+            if not app_id and hasattr(settings, 'WHATSAPP_APP_ID'):
+                app_id = settings.WHATSAPP_APP_ID
+                print(f"Usando WHATSAPP_APP_ID global: {app_id}")
             
             # Verificar si tenemos los valores necesarios para la API
             if not access_token:
@@ -161,12 +167,19 @@ class ChannelService:
             print(f"Enviando mensaje a WhatsApp: número={phone_number}, phone_number_id={phone_number_id}")
             print(f"Usando API versión: {api_version}")
             print(f"Access token (primeros 10 caracteres): {access_token[:10]}...")
+            if app_id:
+                print(f"Usando App ID: {app_id}")
             
             # Clean phone number (remove + if present)
             if phone_number.startswith("+"):
                 phone_number = phone_number[1:]
             
-            url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+            # Construir URL, incluyendo app_id si está disponible
+            base_url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+            if app_id:
+                # Añadir app_id como parámetro de consulta
+                base_url += f"?app_id={app_id}"
+                
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
@@ -181,30 +194,22 @@ class ChannelService:
                 }
             }
             
-            print(f"URL WhatsApp API: {url}")
+            print(f"URL WhatsApp API: {base_url}")
             print(f"Payload: {payload}")
             
             # Intentar enviar el mensaje
-            response = requests.post(url, headers=headers, json=payload)
+            response = requests.post(base_url, headers=headers, json=payload)
             
             # Si el primer intento falla y tenemos un WABA_ID diferente, intentar con él
             if response.status_code != 200 and phone_number_id != waba_id:
                 phone_number_id = waba_id
                 print(f"Primer intento fallido. Intentando con WABA_ID: {phone_number_id}")
                 
-                url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
-                response = requests.post(url, headers=headers, json=payload)
-            
-            # Si todavía falla, intentar con el número de teléfono directo (sin el +)
-            if response.status_code != 200:
-                # Extraer el número sin formato internacional
-                clean_number = phone_number.replace("+", "").replace(" ", "")
-                if clean_number.startswith("57"):  # Para Colombia
-                    phone_number_id = clean_number
-                    print(f"Tercer intento: Usando el número directo como ID: {phone_number_id}")
+                base_url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+                if app_id:
+                    base_url += f"?app_id={app_id}"
                     
-                    url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
-                    response = requests.post(url, headers=headers, json=payload)
+                response = requests.post(base_url, headers=headers, json=payload)
             
             # Imprimir información de la respuesta para depuración
             print(f"Respuesta de WhatsApp API: status_code={response.status_code}")
@@ -221,6 +226,11 @@ class ChannelService:
                 print(f"Error al enviar mensaje a WhatsApp: {response.status_code}")
                 error_message = response_data.get("error", {}).get("message", "Unknown error")
                 print(f"Mensaje de error: {error_message}")
+                
+                # Verificar si es un error de app_id
+                if error_message and "Provide valid app ID" in error_message:
+                    print("Error de App ID: Debes proporcionar un app_id válido en la configuración.")
+                    print("Agrega WHATSAPP_APP_ID a tu archivo .env o en la configuración del canal.")
                 
                 # Verificar si es un error de token
                 if response.status_code == 401 or (response.status_code == 400 and "token" in str(error_message).lower()):
