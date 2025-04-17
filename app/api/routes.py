@@ -13,7 +13,8 @@ from app.models.message import (
     ChannelMessageResponse, 
     AgentMessageRequest,
     ToggleChatbotRequest,
-    ToggleChatbotResponse
+    ToggleChatbotResponse,
+    AgentDirectMessageRequest
 )
 from app.models.audio import AudioMessageRequest, AudioMessageResponse
 from app.models.conversation import ConversationHistory
@@ -318,88 +319,238 @@ async def handle_whatsapp_webhook(request: Request):
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error interno al procesar el webhook")
 
 @api_router.post("/agent/message", response_model=ChannelMessageResponse)
-async def agent_send_message(request: AgentMessageRequest = Body(..., example=EXAMPLES["agent_message"]["value"])):
+async def agent_send_message(request: AgentMessageRequest = Body(...)):
     """
-    Allow a human agent to send a message to a lead
+    Endpoint unificado para que un agente humano envíe mensajes a leads.
+    
+    Esta ruta permite:
+    1. Enviar un mensaje a una conversación existente (proporcionando conversation_id)
+    2. Iniciar una nueva conversación con un lead (proporcionando lead_id y datos de canal)
     
     Args:
-        request: The message request containing conversation_id, agent_id, and message content
+        request: La solicitud que contiene los datos del mensaje y la conversación/lead
         
     Returns:
-        The response message
+        La respuesta del mensaje con detalles de la conversación
     """
     try:
+        logger.info(f"Agente {request.agent_id} enviando mensaje")
+        
         conversation_id = request.conversation_id
-        agent_id = request.agent_id
-        mensaje = request.mensaje
+        is_new_conversation = False
         
-        # Get conversation details
-        from app.db.supabase_client import supabase
-        conv_result = supabase.table("conversaciones").select("*").eq("id", str(conversation_id)).limit(1).execute()
-        
-        if not conv_result.data or len(conv_result.data) == 0:
-            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
-        
-        conversation = conv_result.data[0]
-        
-        # Check if chatbot is active and deactivate it if needed
-        if request.deactivate_chatbot and conversation.get("chatbot_activo", True):
-            supabase.table("conversaciones").update({"chatbot_activo": False}).eq("id", str(conversation_id)).execute()
-        
-        # Save agent message
-        message_data = {
-            "conversacion_id": str(conversation_id),
-            "origen": "agent",
-            "remitente_id": str(agent_id),
-            "contenido": mensaje,
-            "tipo_contenido": "text",
-            "metadata": request.metadata
-        }
-        
-        # Save message directly to database
-        message_result = supabase.table("mensajes").insert(message_data).execute()
-        
-        if not message_result.data or len(message_result.data) == 0:
-            raise HTTPException(status_code=500, detail="Failed to save agent message")
-        
-        mensaje_id = UUID(message_result.data[0]["id"])
-        
-        # Update conversation's last message timestamp
-        supabase.table("conversaciones").update({
-            "ultimo_mensaje": "now()",
-            "metadata": {
-                **(conversation.get("metadata") or {}),
-                "last_agent_id": str(agent_id)
-            }
-        }).eq("id", str(conversation_id)).execute()
-        
-        # Send message to the lead through the appropriate channel
+        # Si no hay conversation_id, necesitamos verificar si existe una conversación o crear una nueva
+        if not conversation_id:
+            if not request.lead_id:
+                raise ValueError("Debe proporcionar conversation_id o lead_id")
+                
+            if not request.channel_id or not request.channel_identifier or not request.chatbot_id or not request.empresa_id:
+                raise ValueError("Para crear una nueva conversación debe proporcionar lead_id, channel_id, channel_identifier, chatbot_id y empresa_id")
+            
+            logger.info(f"Verificando conversación existente para lead {request.lead_id} en canal {request.channel_id}")
+            
+            # Verificar si el lead existe
+            lead_result = supabase.table("leads").select("*").eq("id", str(request.lead_id)).limit(1).execute()
+            
+            if not lead_result.data:
+                raise ValueError(f"Lead con ID {request.lead_id} no encontrado")
+            
+            # Verificar si ya existe una conversación para este lead en este canal
+            conversation_result = supabase.table("conversaciones").select("*")\
+                .eq("lead_id", str(request.lead_id))\
+                .eq("canal_id", str(request.channel_id))\
+                .order("created_at", desc=True)\
+                .limit(1)\
+                .execute()
+                
+            if conversation_result.data:
+                # Usar la conversación existente
+                conversation_id = UUID(conversation_result.data[0]["id"])
+                logger.info(f"Usando conversación existente {conversation_id}")
+            else:
+                # Crear una nueva conversación
+                logger.info(f"Creando nueva conversación para lead {request.lead_id} en canal {request.channel_id}")
+                
+                new_conversation = {
+                    "lead_id": str(request.lead_id),
+                    "chatbot_id": str(request.chatbot_id),
+                    "canal_id": str(request.channel_id),
+                    "canal_identificador": request.channel_identifier,
+                    "estado": "activa",
+                    "chatbot_activo": not request.deactivate_chatbot,  # Configuración inicial del chatbot
+                    "metadata": {
+                        "initiated_by": "agent",
+                        "agent_id": str(request.agent_id),
+                        **(request.metadata or {})
+                    }
+                }
+                
+                conversation_insert = supabase.table("conversaciones").insert(new_conversation).execute()
+                
+                if not conversation_insert.data:
+                    raise ValueError("Error al crear nueva conversación")
+                    
+                conversation_id = UUID(conversation_insert.data[0]["id"])
+                is_new_conversation = True
+                logger.info(f"Nueva conversación creada: {conversation_id}")
+        else:
+            # Verificar si la conversación existe
+            conv_result = supabase.table("conversaciones").select("*").eq("id", str(conversation_id)).limit(1).execute()
+            
+            if not conv_result.data:
+                raise ValueError(f"Conversación con ID {conversation_id} no encontrada")
+            
+            # Si se proporciona channel_id o channel_identifier, verificar que coincidan con la conversación
+            if request.channel_id:
+                conversation_canal_id = UUID(conv_result.data[0]["canal_id"])
+                if request.channel_id != conversation_canal_id:
+                    logger.warning(f"El channel_id proporcionado ({request.channel_id}) no coincide con el canal de la conversación ({conversation_canal_id})")
+            
+        # Usar el servicio de canal para enviar el mensaje
         from app.services.channel_service import channel_service
-        channel_response = channel_service.send_message_to_channel(
+        
+        response = channel_service.send_agent_message(
             conversation_id=conversation_id,
-            message=mensaje,
+            agent_id=request.agent_id,
+            message=request.mensaje,
             metadata={
-                "agent_id": str(agent_id),
-                "origin": "agent",
-                "message_id": str(mensaje_id)
+                "deactivate_chatbot": request.deactivate_chatbot,
+                **(request.metadata or {})
             }
+        )
+        
+        # Desactivar chatbot si se solicita
+        if request.deactivate_chatbot:
+            supabase.table("conversaciones").update({
+                "chatbot_activo": False
+            }).eq("id", str(conversation_id)).execute()
+            logger.info(f"Chatbot desactivado para la conversación {conversation_id}")
+        
+        return ChannelMessageResponse(
+            mensaje_id=response["mensaje_id"],
+            conversacion_id=conversation_id,
+            respuesta=request.mensaje,
+            metadata={
+                "agent_id": str(request.agent_id),
+                "conversation_created": is_new_conversation,
+                "lead_id": str(request.lead_id) if request.lead_id else None,
+                "channel_response": response.get("channel_response", {}),
+                "origin": "agent"
+            }
+        )
+    except ValueError as ve:
+        logger.error(f"Error de validación al procesar mensaje de agente: {str(ve)}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(f"Error al procesar mensaje de agente: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al procesar mensaje de agente: {str(e)}")
+
+@api_router.post("/agent/direct-message", response_model=ChannelMessageResponse)
+async def agent_send_direct_message(request: AgentDirectMessageRequest = Body(...)):
+    """
+    Allow a human agent to send a direct message to a lead, creating a new conversation if needed
+    
+    Args:
+        request: The direct message request containing lead_id, channel info and message content
+        
+    Returns:
+        The response message with conversation details
+    """
+    try:
+        logger.info(f"Agente {request.agent_id} enviando mensaje directo a lead {request.lead_id} por canal {request.channel_id}")
+        
+        # Verificar si el lead existe
+        lead_result = supabase.table("leads").select("*").eq("id", str(request.lead_id)).limit(1).execute()
+        
+        if not lead_result.data:
+            raise ValueError(f"Lead con ID {request.lead_id} no encontrado")
+        
+        # Verificar si ya existe una conversación para este lead en este canal
+        conversation_result = supabase.table("conversaciones").select("*")\
+            .eq("lead_id", str(request.lead_id))\
+            .eq("canal_id", str(request.channel_id))\
+            .order("created_at", desc=True)\
+            .limit(1)\
+            .execute()
+            
+        conversation_id = None
+        
+        if conversation_result.data:
+            # Usar la conversación existente
+            conversation_id = UUID(conversation_result.data[0]["id"])
+            logger.info(f"Usando conversación existente {conversation_id}")
+        else:
+            # Crear una nueva conversación
+            logger.info(f"Creando nueva conversación para lead {request.lead_id} en canal {request.channel_id}")
+            
+            new_conversation = {
+                "lead_id": str(request.lead_id),
+                "chatbot_id": str(request.chatbot_id),
+                "canal_id": str(request.channel_id),
+                "canal_identificador": request.channel_identifier,
+                "estado": "activa",
+                "chatbot_activo": False,  # Desactivamos el chatbot ya que es un mensaje directo del agente
+                "metadata": {
+                    "initiated_by": "agent",
+                    "agent_id": str(request.agent_id)
+                }
+            }
+            
+            conversation_insert = supabase.table("conversaciones").insert(new_conversation).execute()
+            
+            if not conversation_insert.data:
+                raise ValueError("Error al crear nueva conversación")
+                
+            conversation_id = UUID(conversation_insert.data[0]["id"])
+            logger.info(f"Nueva conversación creada: {conversation_id}")
+        
+        # Usar el servicio de canal para enviar el mensaje
+        from app.services.channel_service import channel_service
+        
+        response = channel_service.send_agent_message(
+            conversation_id=conversation_id,
+            agent_id=request.agent_id,
+            message=request.mensaje,
+            metadata=request.metadata
         )
         
         return ChannelMessageResponse(
-            mensaje_id=mensaje_id,
+            mensaje_id=response["mensaje_id"],
             conversacion_id=conversation_id,
-            respuesta=mensaje,
+            respuesta=request.mensaje,
             metadata={
-                "agent_id": str(agent_id),
-                "origin": "agent",
-                "channel_response": channel_response
+                "agent_id": str(request.agent_id),
+                "lead_id": str(request.lead_id),
+                "channel_id": str(request.channel_id),
+                "channel_identifier": request.channel_identifier,
+                "channel_response": response.get("channel_response", {}),
+                "conversation_created": conversation_id != UUID(conversation_result.data[0]["id"]) if conversation_result.data else True,
+                "origin": "agent"
             }
         )
-    except HTTPException:
-        raise
+    except ValueError as ve:
+        logger.error(f"Error de validación al procesar mensaje directo: {str(ve)}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        logger.error(f"Error processing agent message: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Error processing agent message: {str(e)}")
+        logger.error(f"Error al procesar mensaje directo: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al procesar mensaje directo: {str(e)}")
+
+@api_router.get("/channels", response_model=List[Dict[str, Any]])
+async def get_supported_channels():
+    """
+    Get a list of all supported channels
+    
+    Returns:
+        List of channel data
+    """
+    try:
+        from app.services.channel_service import channel_service
+        channels = channel_service.get_supported_channels()
+        
+        return channels
+    except Exception as e:
+        logger.error(f"Error al obtener canales soportados: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al obtener canales soportados: {str(e)}")
 
 @api_router.post("/agent/toggle-chatbot", response_model=ToggleChatbotResponse)
 async def toggle_chatbot(request: ToggleChatbotRequest = Body(..., example=EXAMPLES["toggle_chatbot"]["value"])):

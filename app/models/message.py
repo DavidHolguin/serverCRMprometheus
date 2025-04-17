@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, Any, Dict, List
-from pydantic import BaseModel, Field, UUID4
+from pydantic import BaseModel, Field, UUID4, validator
 from app.models.base import *
 
 class MessageBase(BaseModel):
@@ -53,11 +53,39 @@ class ChannelMessageResponse(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 class AgentMessageRequest(BaseModel):
-    """Model for agent message requests"""
-    conversation_id: UUID4 = Field(..., description="ID of the conversation")
+    """Modelo unificado para mensajes de agente humano"""
+    agent_id: UUID4 = Field(..., description="ID del agente que envía el mensaje")
+    mensaje: str = Field(..., description="Contenido del mensaje")
+    
+    # Campos para conversación existente
+    conversation_id: Optional[UUID4] = Field(None, description="ID de la conversación existente (opcional)")
+    
+    # Campos para nueva conversación o mensajes directos
+    lead_id: Optional[UUID4] = Field(None, description="ID del lead para iniciar nueva conversación (opcional)")
+    channel_id: Optional[UUID4] = Field(None, description="ID del canal a utilizar")
+    channel_identifier: Optional[str] = Field(None, description="Identificador del canal (teléfono, chat ID, etc.)")
+    chatbot_id: Optional[UUID4] = Field(None, description="ID del chatbot para asociar a la conversación")
+    empresa_id: Optional[UUID4] = Field(None, description="ID de la empresa")
+    
+    # Configuración adicional
+    deactivate_chatbot: bool = Field(False, description="Desactivar el chatbot para esta conversación")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Metadatos adicionales")
+    
+    @validator('conversation_id', 'lead_id')
+    def validate_ids(cls, v, values):
+        if 'conversation_id' in values and values['conversation_id'] is None and 'lead_id' in values and values['lead_id'] is None:
+            raise ValueError("Debe proporcionar conversation_id o lead_id")
+        return v
+
+class AgentDirectMessageRequest(BaseModel):
+    """Model for direct agent message requests to a lead without an existing conversation"""
     agent_id: UUID4 = Field(..., description="ID of the agent sending the message")
+    lead_id: UUID4 = Field(..., description="ID of the lead to message")
+    channel_id: UUID4 = Field(..., description="Channel ID to use for sending the message")
+    channel_identifier: str = Field(..., description="Channel identifier (phone number, chat ID, etc.)")
     mensaje: str = Field(..., description="Message content")
-    deactivate_chatbot: bool = Field(False, description="Whether to deactivate the chatbot for this conversation")
+    chatbot_id: UUID4 = Field(..., description="ID of the chatbot to associate with the conversation")
+    empresa_id: UUID4 = Field(..., description="ID of the company")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
 
 class ToggleChatbotRequest(BaseModel):
