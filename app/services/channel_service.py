@@ -116,6 +116,8 @@ class ChannelService:
             access_token = config.get("access_token")
             phone_number_id = config.get("phone_number_id")
             api_version = config.get("api_version")
+            waba_id = settings.WHATSAPP_WABA_ID  # Definir waba_id al inicio para usarlo en todo el método
+            business_id = settings.WHATSAPP_BUSINESS_PHONE
             
             # Si no hay configuración en el canal, usar las variables globales de configuración
             if not access_token:
@@ -137,9 +139,6 @@ class ChannelService:
                 print("No se encontró phone_number_id en la configuración del canal, intentando descubrirlo...")
                 
                 # Intentar descubrir automáticamente el Phone Number ID
-                business_id = settings.WHATSAPP_BUSINESS_PHONE
-                waba_id = settings.WHATSAPP_WABA_ID
-                
                 discovered_id = self._discover_whatsapp_phone_number_id(
                     access_token=access_token,
                     business_id=business_id,
@@ -189,8 +188,8 @@ class ChannelService:
             response = requests.post(url, headers=headers, json=payload)
             
             # Si el primer intento falla y tenemos un WABA_ID diferente, intentar con él
-            if response.status_code != 200 and hasattr(settings, 'WHATSAPP_WABA_ID') and phone_number_id != settings.WHATSAPP_WABA_ID:
-                phone_number_id = settings.WHATSAPP_WABA_ID
+            if response.status_code != 200 and phone_number_id != waba_id:
+                phone_number_id = waba_id
                 print(f"Primer intento fallido. Intentando con WABA_ID: {phone_number_id}")
                 
                 url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
