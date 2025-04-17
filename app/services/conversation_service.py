@@ -159,6 +159,17 @@ class ConversationService:
             conversation = self.get_or_create_conversation(lead_id, chatbot_id, canal_id, canal_identificador)
             conversation_id = UUID(conversation["id"])
             
+            # Verificar si el chatbot está activo para esta conversación
+            chatbot_activo = conversation.get("chatbot_activo", True)
+            if not chatbot_activo:
+                print(f"Chatbot está desactivado para la conversación {conversation_id}. No se generará respuesta automática.")
+                return {
+                    "mensaje_id": None,
+                    "conversacion_id": str(conversation_id),
+                    "respuesta": None,
+                    "metadata": {"chatbot_disabled": True}
+                }
+            
             # Guardar mensaje sanitizado
             user_message = langchain_service.save_message(conversation_id, sanitized_mensaje, is_user=True)
             
@@ -198,6 +209,36 @@ class ConversationService:
                 metadata_response = {
                     "user_message_id": user_message["id"]
                 }
+            
+            # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
+            from app.services.channel_service import channel_service
+            try:
+                # Agregamos log para debug
+                print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
+                
+                channel_response = channel_service.send_message_to_channel(
+                    conversation_id=conversation_id,
+                    message=response,
+                    metadata={
+                        "origin": "chatbot",
+                        "message_id": bot_message["id"],
+                        "chatbot_id": str(chatbot_id)
+                    }
+                )
+                
+                # Agregar la información de envío a los metadatos del mensaje
+                supabase.table("mensajes").update({
+                    "metadata": {
+                        **(bot_message.get("metadata") or {}),
+                        "channel_delivery": channel_response
+                    }
+                }).eq("id", bot_message["id"]).execute()
+                
+                metadata_response["channel_delivery"] = channel_response
+                
+            except Exception as channel_error:
+                print(f"Error al enviar mensaje al canal: {channel_error}")
+                metadata_response["channel_error"] = str(channel_error)
             
             return {
                 "mensaje_id": bot_message["id"],

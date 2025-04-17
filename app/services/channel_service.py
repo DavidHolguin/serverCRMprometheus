@@ -114,19 +114,26 @@ class ChannelService:
         try:
             access_token = config.get("access_token")
             phone_number_id = config.get("phone_number_id")
+            api_version = config.get("api_version", "v17.0")
             
             if not access_token or not phone_number_id:
-                raise ValueError("Access token or phone number ID not found in WhatsApp configuration")
+                error_msg = "Error en configuración de WhatsApp: Faltan access_token o phone_number_id"
+                print(error_msg)
+                return {"success": False, "error": error_msg}
+            
+            # Log para depuración
+            print(f"Enviando mensaje a WhatsApp: número={phone_number}, phone_number_id={phone_number_id}")
             
             # Clean phone number (remove + if present)
             if phone_number.startswith("+"):
                 phone_number = phone_number[1:]
             
-            url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
+            url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
             headers = {
                 "Authorization": f"Bearer {access_token}",
                 "Content-Type": "application/json"
             }
+            
             payload = {
                 "messaging_product": "whatsapp",
                 "to": phone_number,
@@ -136,13 +143,40 @@ class ChannelService:
                 }
             }
             
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            print(f"URL WhatsApp API: {url}")
+            print(f"Payload: {payload}")
             
-            return response.json()
+            response = requests.post(url, headers=headers, json=payload)
+            
+            # Imprimir información de la respuesta para depuración
+            print(f"Respuesta de WhatsApp API: status_code={response.status_code}")
+            
+            try:
+                response_data = response.json()
+                print(f"Respuesta JSON: {response_data}")
+            except:
+                print(f"La respuesta no es JSON válido: {response.text[:200]}")
+                response_data = {"raw_response": response.text[:200]}
+            
+            # Verificar el código de estado
+            if response.status_code != 200:
+                print(f"Error al enviar mensaje a WhatsApp: {response.status_code}")
+                return {
+                    "success": False, 
+                    "status_code": response.status_code, 
+                    "response": response_data
+                }
+            
+            return {
+                "success": True, 
+                "status_code": response.status_code, 
+                "response": response_data
+            }
         except Exception as e:
-            print(f"Error sending WhatsApp message: {e}")
-            raise
+            print(f"Excepción al enviar mensaje a WhatsApp: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
     
     def _send_messenger_message(self, config: Dict[str, Any], sender_id: str, message: str) -> Dict[str, Any]:
         """
