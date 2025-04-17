@@ -29,6 +29,9 @@ class Settings(BaseModel):
     LANGCHAIN_API_KEY: Optional[str] = Field(default_factory=lambda: os.getenv("LANGCHAIN_API_KEY", None))
     LANGCHAIN_PROJECT: Optional[str] = Field(default_factory=lambda: os.getenv("LANGCHAIN_PROJECT", None))
     
+    # WhatsApp Settings
+    WHATSAPP_VERIFY_TOKEN: str = Field(default_factory=lambda: os.getenv("WHATSAPP_VERIFY_TOKEN", "DEFAULT_FALLBACK_TOKEN"))
+    
     # Default LLM Settings
     DEFAULT_MODEL: str = "gpt-4o-mini"
     DEFAULT_TEMPERATURE: float = 0.4
