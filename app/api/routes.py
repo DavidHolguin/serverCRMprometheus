@@ -214,26 +214,42 @@ async def handle_whatsapp_webhook(request: Request):
                         lead_id = None
                         lead_found = False
 
-                        # 3. Buscar Lead existente por canal_id y canal_identificador (teléfono)
-                        lead_result = supabase.table("leads") \
-                            .select("id") \
+                        # 3. Buscar Lead existente por teléfono en lead_datos_personales
+                        logger.info(f"Buscando lead con teléfono {phone_number}")
+                        
+                        # Buscar primero en lead_datos_personales
+                        lead_datos_result = supabase.table("lead_datos_personales") \
+                            .select("lead_id") \
                             .eq("telefono", phone_number) \
-                            .eq("empresa_id", str(empresa_id)) \
                             .limit(1).execute()
-
-                        if lead_result.data:
-                            lead_id = UUID(lead_result.data[0]["id"])
-                            lead_found = True
-                            logger.info(f"Lead existente encontrado para {phone_number}: ID {lead_id}")
-                        else:
+                            
+                        if lead_datos_result.data:
+                            lead_id = UUID(lead_datos_result.data[0]["lead_id"])
+                            
+                            # Verificar que el lead pertenezca a la misma empresa
+                            lead_empresa_result = supabase.table("leads") \
+                                .select("id") \
+                                .eq("id", str(lead_id)) \
+                                .eq("empresa_id", str(empresa_id)) \
+                                .limit(1).execute()
+                                
+                            if lead_empresa_result.data:
+                                lead_found = True
+                                logger.info(f"Lead existente encontrado para {phone_number}: ID {lead_id}")
+                            else:
+                                lead_id = None  # Reset si el lead no pertenece a la empresa correcta
+                                logger.warning(f"Lead encontrado para {phone_number} pero pertenece a otra empresa")
+                        
+                        if not lead_id:
                             # 3.1. Crear Lead si no existe
                             logger.info(f"Lead no encontrado para {phone_number}. Creando nuevo lead...")
                             try:
                                 # Crear registro básico en leads
                                 insert_lead_result = supabase.table("leads").insert({
                                     "empresa_id": str(empresa_id),
-                                    "origen_canal_id": str(canal_id), # Marcar de dónde vino originalmente
-                                    "telefono": phone_number # Guardar teléfono directamente si el modelo lo permite
+                                    "canal_origen": "whatsapp",
+                                    "canal_id": str(canal_id), # Marcar de dónde vino originalmente
+                                    "estado": "nuevo"
                                 }).execute()
 
                                 if not insert_lead_result.data:
@@ -243,16 +259,22 @@ async def handle_whatsapp_webhook(request: Request):
                                 lead_id = UUID(insert_lead_result.data[0]["id"])
                                 logger.info(f"Nuevo lead creado para {phone_number}: ID {lead_id}")
 
-                                # 3.2. Guardar Datos Personales (si existen en el payload)
+                                # 3.2. Guardar el teléfono en lead_datos_personales
+                                supabase.table("lead_datos_personales").insert({
+                                    "lead_id": str(lead_id),
+                                    "telefono": phone_number
+                                }).execute()
+                                logger.info(f"Teléfono {phone_number} guardado para lead {lead_id}")
+
+                                # 3.3. Guardar Datos Personales adicionales (si existen en el payload)
                                 if contacts:
                                     profile_name = contacts[0].get("profile", {}).get("name")
                                     if profile_name:
-                                        logger.info(f"Guardando nombre '{profile_name}' en lead_datos_personales para lead {lead_id}")
-                                        supabase.table("lead_datos_personales").insert({
-                                            "lead_id": str(lead_id),
-                                            "campo": "nombre_whatsapp", # Usar un nombre de campo específico
-                                            "valor": profile_name
-                                        }).execute()
+                                        logger.info(f"Actualizando lead_datos_personales con nombre '{profile_name}' para lead {lead_id}")
+                                        # Actualizar el registro recién creado con el nombre
+                                        supabase.table("lead_datos_personales").update({
+                                            "nombre": profile_name
+                                        }).eq("lead_id", str(lead_id)).execute()
 
                             except Exception as e_create:
                                 logger.error(f"Excepción al crear lead o guardar datos para {phone_number}: {e_create}", exc_info=True)
