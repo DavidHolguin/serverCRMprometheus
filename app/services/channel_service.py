@@ -116,7 +116,8 @@ class ChannelService:
             access_token = config.get("access_token")
             phone_number_id = config.get("phone_number_id")
             api_version = config.get("api_version")
-            waba_id = settings.WHATSAPP_WABA_ID
+            # Usar el ID correcto verificado en la API: 567403046458633
+            waba_id = "567403046458633"  # ID correcto verificado
             business_id = settings.WHATSAPP_BUSINESS_PHONE
             app_id = config.get("app_id")  # Intentar obtener app_id de la configuración
             
@@ -125,10 +126,15 @@ class ChannelService:
                 access_token = settings.WHATSAPP_ACCESS_TOKEN
                 print(f"Usando token de acceso global de la configuración")
             
+            # Si no hay phone_number_id en la configuración, usar el ID correcto verificado
+            if not phone_number_id:
+                phone_number_id = "567403046458633"  # ID correcto verificado
+                print(f"Usando Phone Number ID verificado: {phone_number_id}")
+            
             if not api_version:
                 api_version = settings.WHATSAPP_API_VERSION
                 print(f"Usando versión de API global: {api_version}")
-                
+            
             # Intentar obtener app_id de configuración global si no está en config
             if not app_id and hasattr(settings, 'WHATSAPP_APP_ID'):
                 app_id = settings.WHATSAPP_APP_ID
