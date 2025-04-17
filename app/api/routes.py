@@ -347,8 +347,6 @@ async def agent_send_message(request: AgentMessageRequest = Body(..., example=EX
             supabase.table("conversaciones").update({"chatbot_activo": False}).eq("id", str(conversation_id)).execute()
         
         # Save agent message
-        from app.services.langchain_service import langchain_service
-        
         message_data = {
             "conversacion_id": str(conversation_id),
             "origen": "agent",
@@ -400,6 +398,7 @@ async def agent_send_message(request: AgentMessageRequest = Body(..., example=EX
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error processing agent message: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing agent message: {str(e)}")
 
 @api_router.post("/agent/toggle-chatbot", response_model=ToggleChatbotResponse)
