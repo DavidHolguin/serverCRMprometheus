@@ -93,6 +93,54 @@ class LangChainService:
             "api_key": config["api_key"] or settings.OPENAI_API_KEY
         }
     
+    def _get_chatbot_prompt_template(self, chatbot_id: UUID) -> Dict[str, Any]:
+        """
+        Obtiene el prompt template asociado a un chatbot
+        
+        Args:
+            chatbot_id: El ID del chatbot
+            
+        Returns:
+            Dict conteniendo la información del prompt template
+        """
+        # Obtener el mapeo de prompt para este chatbot
+        mapping_result = supabase.table("chatbot_prompt_mapping") \
+            .select("*") \
+            .eq("chatbot_id", str(chatbot_id)) \
+            .eq("is_active", True) \
+            .order("orden", desc=False) \
+            .execute()
+        
+        if not mapping_result.data or len(mapping_result.data) == 0:
+            # Si no hay un prompt template específico, usamos el contexto tradicional
+            return None
+        
+        mapping = mapping_result.data[0]
+        prompt_template_id = mapping["prompt_template_id"]
+        parametros = mapping.get("parametros", {})
+        
+        # Obtener el prompt template
+        template_result = supabase.table("prompt_templates") \
+            .select("*") \
+            .eq("id", prompt_template_id) \
+            .eq("is_active", True) \
+            .limit(1) \
+            .execute()
+        
+        if not template_result.data or len(template_result.data) == 0:
+            return None
+        
+        template = template_result.data[0]
+        
+        return {
+            "id": template["id"],
+            "nombre": template["nombre"],
+            "tipo_template": template["tipo_template"],
+            "contenido": template["contenido"],
+            "variables": template["variables"],
+            "parametros": parametros
+        }
+    
     def _get_chatbot_context(self, chatbot_id: UUID) -> Dict[str, Any]:
         """
         Get the context for a specific chatbot
@@ -119,34 +167,86 @@ class LangChainService:
         
         context = context_result.data[0]
         
-        # Construct system message
-        system_message = f"""
-        # {chatbot['nombre']}
+        # Verificar si hay ejemplos de Q&A en el contexto
+        qa_examples = context.get("qa_examples", [])
+        qa_examples_text = ""
         
-        ## Personalidad
-        {context['personality']}
+        # Formatear los ejemplos de Q&A para el prompt
+        if qa_examples and len(qa_examples) > 0:
+            qa_examples_text = "\n## Ejemplos de preguntas y respuestas\n"
+            for i, example in enumerate(qa_examples):
+                if isinstance(example, dict) and "pregunta" in example and "respuesta" in example:
+                    qa_examples_text += f"\nPregunta {i+1}: {example['pregunta']}\n"
+                    qa_examples_text += f"Respuesta {i+1}: {example['respuesta']}\n"
         
-        ## Contexto general
-        {context['general_context']}
+        # Verificar si hay un prompt_template_id en el contexto
+        prompt_template_id = context.get("prompt_template")
+        prompt_template = None
         
-        ## Tono de comunicación
-        {context['communication_tone']}
+        # Si hay un ID de prompt_template, obtener el template de la tabla prompt_templates
+        if prompt_template_id:
+            try:
+                # Obtener el prompt template
+                template_result = supabase.table("prompt_templates") \
+                    .select("*") \
+                    .eq("id", prompt_template_id) \
+                    .eq("is_active", True) \
+                    .limit(1) \
+                    .execute()
+                
+                if template_result.data and len(template_result.data) > 0:
+                    template = template_result.data[0]
+                    prompt_template = template["contenido"]
+                    
+                    # Reemplazar variables estándar
+                    prompt_template = prompt_template.replace("{{chatbot_name}}", chatbot['nombre'])
+                    prompt_template = prompt_template.replace("{{personality}}", context['personality'] or "")
+                    prompt_template = prompt_template.replace("{{general_context}}", context['general_context'] or "")
+                    prompt_template = prompt_template.replace("{{communication_tone}}", context['communication_tone'] or "")
+                    prompt_template = prompt_template.replace("{{main_purpose}}", context['main_purpose'] or "")
+                    prompt_template = prompt_template.replace("{{special_instructions}}", context['special_instructions'] or "")
+                    prompt_template = prompt_template.replace("{{qa_examples}}", qa_examples_text)
+                    
+                    # Manejo especial para key_points que es un array/objeto
+                    try:
+                        key_points_str = json.dumps(context['key_points'], ensure_ascii=False) if context.get('key_points') else "[]"
+                        prompt_template = prompt_template.replace("{{key_points}}", key_points_str)
+                    except:
+                        prompt_template = prompt_template.replace("{{key_points}}", "[]")
+            except Exception as e:
+                print(f"Error obteniendo prompt template: {e}")
+                # Si hay un error, se usará el formato predeterminado
         
-        ## Propósito principal
-        {context['main_purpose']}
-        
-        ## Puntos clave
-        {json.dumps(context['key_points'], ensure_ascii=False)}
-        
-        ## Instrucciones especiales
-        {context['special_instructions']}
-        
-        Responde de manera concisa y útil. Si no sabes la respuesta, admítelo claramente.
-        """
+        # Si no se encontró un prompt_template personalizado, construir uno estándar
+        if not prompt_template:
+            prompt_template = f"""
+            # {chatbot['nombre']}
+            
+            ## Personalidad
+            {context['personality']}
+            
+            ## Contexto general
+            {context['general_context']}
+            
+            ## Tono de comunicación
+            {context['communication_tone']}
+            
+            ## Propósito principal
+            {context['main_purpose']}
+            
+            ## Puntos clave
+            {json.dumps(context['key_points'], ensure_ascii=False)}
+            
+            ## Instrucciones especiales
+            {context['special_instructions']}
+            {qa_examples_text}
+            
+            Responde de manera concisa y útil. Si no sabes la respuesta, admítelo claramente.
+            """
         
         return {
-            "system_message": system_message,
-            "welcome_message": context["welcome_message"]
+            "system_message": prompt_template,
+            "welcome_message": context.get("welcome_message", "")
         }
     
     def _get_conversation_history(self, conversation_id: UUID, limit: int = settings.MAX_HISTORY_LENGTH) -> List[Dict[str, Any]]:
@@ -219,7 +319,7 @@ class LangChainService:
             max_tokens=llm_config["max_tokens"]
         )
         
-        # Get chatbot context
+        # Get chatbot context (ahora incluye prompt_templates si existen)
         context = self._get_chatbot_context(chatbot_id)
         
         # Create prompt template
