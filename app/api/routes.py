@@ -19,6 +19,7 @@ from app.models.message import (
 from app.models.audio import AudioMessageRequest, AudioMessageResponse
 from app.models.conversation import ConversationHistory
 from app.services.conversation_service import conversation_service
+from app.services.audio_service import audio_service
 from app.models.examples import EXAMPLES
 from app.api.endpoints.evaluations import router as evaluations_router
 from app.core.config import settings
@@ -64,6 +65,49 @@ async def process_message(request: ChannelMessageRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+
+@api_router.post("/channels/audio", response_model=AudioMessageResponse)
+async def process_audio_message(request: AudioMessageRequest = Body(...)):
+    """
+    Process audio messages from any channel, transcribe and generate a response
+    
+    Args:
+        request: The audio message request containing audio data and channel information
+        
+    Returns:
+        The response with transcription and chatbot reply
+    """
+    try:
+        logger.info(f"Procesando mensaje de audio para chatbot {request.chatbot_id}")
+        
+        response = audio_service.process_audio_message(
+            canal_id=request.canal_id,
+            canal_identificador=request.canal_identificador,
+            empresa_id=request.empresa_id,
+            chatbot_id=request.chatbot_id,
+            audio_base64=request.audio_base64,
+            formato_audio=request.formato_audio,
+            idioma=request.idioma,
+            conversacion_id=request.conversacion_id,
+            lead_id=request.lead_id,
+            metadata=request.metadata
+        )
+        
+        logger.info(f"Audio procesado exitosamente para conversación {response['conversacion_id']}")
+        
+        return AudioMessageResponse(
+            mensaje_id=response["mensaje_id"],
+            conversacion_id=response["conversacion_id"],
+            audio_id=response["audio_id"],
+            transcripcion=response["transcripcion"],
+            respuesta=response["respuesta"],
+            duracion_segundos=response["duracion_segundos"],
+            idioma_detectado=response["idioma_detectado"],
+            metadata=response["metadata"]
+        )
+    except Exception as e:
+        logger.error(f"Error al procesar mensaje de audio: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error al procesar mensaje de audio: {str(e)}")
 
 @api_router.get("/conversation/{conversation_id}/history", response_model=ConversationHistory)
 async def get_conversation_history(
@@ -172,15 +216,26 @@ async def handle_whatsapp_webhook(request: Request):
                     for message in messages:
                         # 2. Extraer Identificador y datos básicos
                         phone_number = message.get("from")
-                        message_body = message.get("text", {}).get("body")
                         message_id_wa = message.get("id")
                         timestamp = message.get("timestamp")
+                        message_type = "text"  # Por defecto es texto
+                        message_body = None
+                        audio_data = None
 
-                        if not phone_number or not message_body:
+                        # Verificar si es un mensaje de texto o audio
+                        if "text" in message and message.get("text", {}).get("body"):
+                            message_type = "text"
+                            message_body = message.get("text", {}).get("body")
+                        elif "audio" in message:
+                            message_type = "audio"
+                            audio_data = message.get("audio", {})
+                            logger.info(f"Mensaje de audio recibido: {audio_data}")
+
+                        if not phone_number or (message_type == "text" and not message_body and message_type == "audio" and not audio_data):
                             logger.info(f"Mensaje incompleto recibido (ID: {message_id_wa}). Ignorando.")
                             continue
 
-                        logger.info(f"Procesando mensaje de {phone_number}: '{message_body}'")
+                        logger.info(f"Procesando mensaje de tipo {message_type} de {phone_number}")
 
                         # --- Inicio Lógica de Lead y Canal ---
 
@@ -192,7 +247,6 @@ async def handle_whatsapp_webhook(request: Request):
                         canal_id = UUID(channel_result.data[0]["id"])
 
                         # Buscar configuración de chatbot activa para este canal
-                        # CORREGIDO: Eliminamos empresa_id que no existe en la tabla
                         chatbot_channel_result = supabase.table("chatbot_canales").select("chatbot_id").eq("canal_id", str(canal_id)).eq("is_active", True).limit(1).execute()
                         if not chatbot_channel_result.data:
                             logger.warning(f"No se encontró configuración de chatbot activa para el canal WhatsApp (ID: {canal_id}).")
@@ -291,24 +345,79 @@ async def handle_whatsapp_webhook(request: Request):
                         metadata_for_service = {
                             "whatsapp_message_id": message_id_wa,
                             "timestamp": timestamp,
-                            "lead_found": lead_found # Podría ser útil para el servicio saber si es nuevo
+                            "lead_found": lead_found, # Podría ser útil para el servicio saber si es nuevo
+                            "message_type": message_type
                         }
-
-                        # 5. Llamar al Servicio de Conversación
+                        
+                        # 5. Procesar el mensaje según su tipo
                         try:
-                            logger.debug(f"Llamando a process_channel_message para lead {lead_id}")
-                            response_data = conversation_service.process_channel_message(
-                                canal_id=canal_id,
-                                canal_identificador=phone_number,
-                                empresa_id=empresa_id,
-                                chatbot_id=chatbot_id,
-                                mensaje=message_body,
-                                lead_id=lead_id, # Pasar el ID del lead encontrado o creado
-                                metadata=metadata_for_service # Pasar metadata sanitizada
-                            )
-                            logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
+                            if message_type == "text":
+                                # Procesar mensaje de texto normal
+                                logger.debug(f"Llamando a process_channel_message para lead {lead_id}")
+                                response_data = conversation_service.process_channel_message(
+                                    canal_id=canal_id,
+                                    canal_identificador=phone_number,
+                                    empresa_id=empresa_id,
+                                    chatbot_id=chatbot_id,
+                                    mensaje=message_body,
+                                    lead_id=lead_id, # Pasar el ID del lead encontrado o creado
+                                    metadata=metadata_for_service # Pasar metadata sanitizada
+                                )
+                                logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
+                            
+                            elif message_type == "audio":
+                                # Procesar mensaje de audio
+                                logger.info(f"Procesando mensaje de audio para WhatsApp, lead {lead_id}")
+                                
+                                # Para WhatsApp necesitamos descargar el audio desde la URL de la API
+                                audio_id = audio_data.get("id")
+                                mime_type = audio_data.get("mime_type", "audio/ogg")  # WhatsApp suele usar audio/ogg para los audios
+                                
+                                try:
+                                    # Usar el método asíncrono de descarga y procesamiento de audio
+                                    import asyncio
+                                    from app.services.audio_service import audio_service
+                                    
+                                    # Preparar metadata para el audio
+                                    audio_metadata = {
+                                        **metadata_for_service,
+                                        "mime_type": mime_type,
+                                        "origin": "whatsapp"
+                                    }
+                                    
+                                    # Procesar el audio de WhatsApp de manera asíncrona
+                                    response_data = asyncio.run(audio_service.process_whatsapp_audio(
+                                        canal_id=canal_id,
+                                        phone_number=phone_number,
+                                        empresa_id=empresa_id,
+                                        chatbot_id=chatbot_id,
+                                        audio_id=audio_id,
+                                        lead_id=lead_id,
+                                        metadata=audio_metadata
+                                    ))
+                                    
+                                    logger.info(f"Audio de WhatsApp procesado exitosamente. Transcripción: {response_data.get('transcripcion')[:50]}...")
+                                    logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
+                                except Exception as e_audio:
+                                    logger.error(f"Error al procesar audio de WhatsApp: {str(e_audio)}", exc_info=True)
+                                    # Si falla el procesamiento de audio, intentamos responder con un mensaje genérico
+                                    try:
+                                        # Responder al usuario indicando que hubo un problema con el audio
+                                        fallback_message = "Lo siento, hubo un problema al procesar tu mensaje de audio. ¿Podrías intentar enviar un mensaje de texto?"
+                                        conversation_service.process_channel_message(
+                                            canal_id=canal_id,
+                                            canal_identificador=phone_number,
+                                            empresa_id=empresa_id,
+                                            chatbot_id=chatbot_id,
+                                            mensaje=fallback_message,
+                                            lead_id=lead_id,
+                                            metadata={**metadata_for_service, "error_audio": str(e_audio), "is_system_message": True}
+                                        )
+                                    except Exception as e_fallback:
+                                        logger.error(f"Error al enviar mensaje de fallback: {str(e_fallback)}", exc_info=True)
+
                         except Exception as e_service:
-                            logger.error(f"Error al procesar mensaje para lead {lead_id} en conversation_service: {e_service}", exc_info=True)
+                            logger.error(f"Error al procesar mensaje para lead {lead_id}: {e_service}", exc_info=True)
 
         # Responder a WhatsApp con 200 OK para confirmar la recepción
         return Response(status_code=status.HTTP_200_OK)
