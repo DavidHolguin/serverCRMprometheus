@@ -374,8 +374,7 @@ async def handle_whatsapp_webhook(request: Request):
                                 mime_type = audio_data.get("mime_type", "audio/ogg")  # WhatsApp suele usar audio/ogg para los audios
                                 
                                 try:
-                                    # Usar el método asíncrono de descarga y procesamiento de audio
-                                    import asyncio
+                                    # Importar el servicio de audio
                                     from app.services.audio_service import audio_service
                                     
                                     # Preparar metadata para el audio
@@ -385,8 +384,9 @@ async def handle_whatsapp_webhook(request: Request):
                                         "origin": "whatsapp"
                                     }
                                     
-                                    # Procesar el audio de WhatsApp de manera asíncrona
-                                    response_data = asyncio.run(audio_service.process_whatsapp_audio(
+                                    # Procesar el audio de forma asíncrona (sin usar asyncio.run() que causa el error)
+                                    # Como ya estamos en un contexto asíncrono, usamos await directamente
+                                    response_data = await audio_service.process_whatsapp_audio(
                                         canal_id=canal_id,
                                         phone_number=phone_number,
                                         empresa_id=empresa_id,
@@ -394,7 +394,7 @@ async def handle_whatsapp_webhook(request: Request):
                                         audio_id=audio_id,
                                         lead_id=lead_id,
                                         metadata=audio_metadata
-                                    ))
+                                    )
                                     
                                     logger.info(f"Audio de WhatsApp procesado exitosamente. Transcripción: {response_data.get('transcripcion')[:50]}...")
                                     logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
