@@ -24,15 +24,17 @@ class ConversationService:
             The conversation data
         """
         try:
-            # Try to find existing active conversation
+            # Primero buscar cualquier conversación existente para este lead en este canal,
+            # independientemente de si el chatbot está activo o no
             result = supabase.table("conversaciones").select("*").eq("lead_id", str(lead_id)) \
-                .eq("chatbot_id", str(chatbot_id)).eq("canal_id", str(canal_id)) \
-                .eq("canal_identificador", canal_identificador).eq("estado", "active").limit(1).execute()
+                .eq("canal_id", str(canal_id)) \
+                .eq("canal_identificador", canal_identificador) \
+                .order("created_at", desc=True).limit(1).execute()
             
             if result.data and len(result.data) > 0:
                 return result.data[0]
             
-            # Create new conversation
+            # Si no encontramos una conversación existente, crear una nueva
             conversation_data = {
                 "lead_id": str(lead_id),
                 "chatbot_id": str(chatbot_id),
