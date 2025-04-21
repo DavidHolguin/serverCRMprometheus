@@ -219,15 +219,17 @@ class ConversationService:
             else:
                 metadata_response["chatbot_disabled"] = True
             
-            # Iniciar proceso de evaluación en segundo plano (sin esperar el resultado)
-            # Esto permite que la evaluación ocurra en paralelo con la respuesta al usuario
-            self._start_async_evaluation(lead_id, conversation_id, UUID(user_message["id"]), empresa_id)
+            # Iniciar proceso de evaluación en segundo plano solo si el chatbot está activo o si se requiere
+            # No iniciamos la evaluación si el chatbot está desactivado y no es necesario
+            if chatbot_activo or metadata.get("evaluate_anyway", False):
+                self._start_async_evaluation(lead_id, conversation_id, UUID(user_message["id"]), empresa_id)
             
             # Respuesta inmediata sin esperar evaluación
             return {
                 "mensaje_id": bot_message["id"] if bot_message else None,
                 "conversacion_id": str(conversation_id),
                 "respuesta": response,
+                "lead_id": str(lead_id),  # Añadimos el lead_id a la respuesta para referencia
                 "metadata": metadata_response
             }
         except Exception as e:
