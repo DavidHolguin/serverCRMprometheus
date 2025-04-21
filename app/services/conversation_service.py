@@ -227,8 +227,11 @@ class ConversationService:
                 self._start_async_evaluation(lead_id, conversation_id, UUID(user_message["id"]), empresa_id)
             
             # Respuesta inmediata sin esperar evaluación
+            # IMPORTANTE: Asegurar que siempre devolvemos un mensaje_id válido, incluso cuando el bot está desactivado
+            mensaje_id = bot_message["id"] if bot_message else user_message["id"]
+            
             return {
-                "mensaje_id": bot_message["id"] if bot_message else None,
+                "mensaje_id": mensaje_id,  # Siempre devolvemos un ID válido
                 "conversacion_id": str(conversation_id),
                 "respuesta": response,
                 "lead_id": str(lead_id),  # Añadimos el lead_id a la respuesta para referencia
