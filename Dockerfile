@@ -27,7 +27,8 @@ RUN pip install --upgrade pip && \
     pip install langchain-community==0.0.13 && \
     pip install langchain-openai==0.0.2 && \
     pip install pydub==0.25.1 && \
-    pip install numpy==1.26.0
+    pip install numpy==1.26.0 && \
+    pip install unidecode==1.3.7
 
 # Copiar el resto de la aplicación
 COPY . .
