@@ -285,7 +285,7 @@ class LangChainService:
         
         return message_history
     
-    def generate_response(self, conversation_id, chatbot_id, empresa_id, message, config=None):
+    def generate_response(self, conversation_id, chatbot_id, empresa_id, message, config=None, special_format=False):
         """
         Generate a response using LangChain and OpenAI
         
@@ -295,6 +295,7 @@ class LangChainService:
             empresa_id: The ID of the company
             message: The user message
             config: Optional configuration dictionary
+            special_format: Whether to use special formatting for the 'id' variable
             
         Returns:
             Generated response
@@ -353,14 +354,26 @@ class LangChainService:
         )
         
         # Generate response
-        response = chain_with_history.invoke(
-            {
-                "id": str(chatbot_id),
-                "history": message_history.messages,
-                "question": message
-            },
-            config  # Pasar la configuración aquí
-        )
+        if special_format:
+            # Formato especial donde la variable 'id' necesita comillas incluidas en el nombre
+            response = chain_with_history.invoke(
+                {
+                    '"id"': str(chatbot_id),  # Nombre de variable con comillas incluidas
+                    "history": message_history.messages,
+                    "question": message
+                },
+                config
+            )
+        else:
+            # Formato normal (para compatibilidad con código existente)
+            response = chain_with_history.invoke(
+                {
+                    "id": str(chatbot_id),
+                    "history": message_history.messages,
+                    "question": message
+                },
+                config
+            )
         
         return response
     

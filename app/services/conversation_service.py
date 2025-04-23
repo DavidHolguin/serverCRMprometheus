@@ -182,54 +182,63 @@ class ConversationService:
             
             # Solo generar respuesta si el chatbot está activo
             if chatbot_activo:
-                # Generar respuesta con el mensaje sanitizado
-                # MODIFICACIÓN: Agregar el configuration con session_id como el ID de la conversación
-                langchain_config = {
-                    "configurable": {
-                        "session_id": str(conversation_id)
+                try:
+                    # Generar respuesta con el mensaje sanitizado
+                    # MODIFICACIÓN: Agregar el configuration con session_id como el ID de la conversación
+                    langchain_config = {
+                        "configurable": {
+                            "session_id": str(conversation_id)
+                        }
                     }
-                }
-                response = langchain_service.generate_response(
-                    conversation_id, 
-                    chatbot_id, 
-                    empresa_id, 
-                    sanitized_mensaje,
-                    config=langchain_config  # Pasar la configuración requerida
-                )
-                
-                # Guardar respuesta del chatbot solo si no está vacía (si el chatbot está activo)
-                if response:
-                    bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
                     
-                    # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
-                    from app.services.channel_service import channel_service
-                    try:
-                        # Agregamos log para debug
-                        print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
+                    # CORRECCIÓN: Necesitamos proveer la variable "id" con formato especial
+                    # El template espera '"id"' (con comillas incluidas en el nombre de la variable)
+                    response = langchain_service.generate_response(
+                        conversation_id, 
+                        chatbot_id, 
+                        empresa_id, 
+                        sanitized_mensaje,
+                        config=langchain_config,  # Pasar la configuración requerida
+                        special_format=True  # Añadir flag para usar formato especial
+                    )
+                    
+                    # Guardar respuesta del chatbot solo si no está vacía (si el chatbot está activo)
+                    if response:
+                        bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
                         
-                        channel_response = channel_service.send_message_to_channel(
-                            conversation_id=conversation_id,
-                            message=response,
-                            metadata={
-                                "origin": "chatbot",
-                                "message_id": bot_message["id"],
-                                "chatbot_id": str(chatbot_id)
-                            }
-                        )
-                        
-                        # Agregar la información de envío a los metadatos del mensaje
-                        supabase.table("mensajes").update({
-                            "metadata": {
-                                **(bot_message.get("metadata") or {}),
-                                "channel_delivery": channel_response
-                            }
-                        }).eq("id", bot_message["id"]).execute()
-                        
-                        metadata_response["channel_delivery"] = channel_response
-                        
-                    except Exception as channel_error:
-                        print(f"Error al enviar mensaje al canal: {channel_error}")
-                        metadata_response["channel_error"] = str(channel_error)
+                        # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
+                        from app.services.channel_service import channel_service
+                        try:
+                            # Agregamos log para debug
+                            print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
+                            
+                            channel_response = channel_service.send_message_to_channel(
+                                conversation_id=conversation_id,
+                                message=response,
+                                metadata={
+                                    "origin": "chatbot",
+                                    "message_id": bot_message["id"],
+                                    "chatbot_id": str(chatbot_id)
+                                }
+                            )
+                            
+                            # Agregar la información de envío a los metadatos del mensaje
+                            supabase.table("mensajes").update({
+                                "metadata": {
+                                    **(bot_message.get("metadata") or {}),
+                                    "channel_delivery": channel_response
+                                }
+                            }).eq("id", bot_message["id"]).execute()
+                            
+                            metadata_response["channel_delivery"] = channel_response
+                            
+                        except Exception as channel_error:
+                            print(f"Error al enviar mensaje al canal: {channel_error}")
+                            metadata_response["channel_error"] = str(channel_error)
+                except Exception as response_error:
+                    print(f"Error al generar respuesta: {response_error}")
+                    metadata_response["response_error"] = str(response_error)
+                    # Registramos el error pero continuamos para devolver una respuesta válida
             else:
                 metadata_response["chatbot_disabled"] = True
             
