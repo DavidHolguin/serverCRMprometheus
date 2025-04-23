@@ -183,7 +183,19 @@ class ConversationService:
             # Solo generar respuesta si el chatbot está activo
             if chatbot_activo:
                 # Generar respuesta con el mensaje sanitizado
-                response = langchain_service.generate_response(conversation_id, chatbot_id, empresa_id, sanitized_mensaje)
+                # MODIFICACIÓN: Agregar el configuration con session_id como el ID de la conversación
+                langchain_config = {
+                    "configurable": {
+                        "session_id": str(conversation_id)
+                    }
+                }
+                response = langchain_service.generate_response(
+                    conversation_id, 
+                    chatbot_id, 
+                    empresa_id, 
+                    sanitized_mensaje,
+                    config=langchain_config  # Pasar la configuración requerida
+                )
                 
                 # Guardar respuesta del chatbot solo si no está vacía (si el chatbot está activo)
                 if response:

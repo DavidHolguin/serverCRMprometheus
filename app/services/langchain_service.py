@@ -285,7 +285,7 @@ class LangChainService:
         
         return message_history
     
-    def generate_response(self, conversation_id: UUID, chatbot_id: UUID, empresa_id: UUID, message: str) -> str:
+    def generate_response(self, conversation_id, chatbot_id, empresa_id, message, config=None):
         """
         Generate a response using LangChain and OpenAI
         
@@ -294,10 +294,19 @@ class LangChainService:
             chatbot_id: The ID of the chatbot
             empresa_id: The ID of the company
             message: The user message
+            config: Optional configuration dictionary
             
         Returns:
             Generated response
         """
+        # Asegurarse de que tenemos una configuración válida
+        if config is None:
+            config = {
+                "configurable": {
+                    "session_id": str(conversation_id)  # Usar conversation_id como session_id por defecto
+                }
+            }
+        
         # Check if chatbot is active for this conversation
         conv_result = supabase.table("conversaciones").select("chatbot_activo").eq("id", str(conversation_id)).limit(1).execute()
         
@@ -344,11 +353,14 @@ class LangChainService:
         )
         
         # Generate response
-        response = chain_with_history.invoke({
-            "id": str(chatbot_id),  # Asegurarnos de pasar el ID como se espera
-            "history": message_history.messages,
-            "question": message
-        })
+        response = chain_with_history.invoke(
+            {
+                "id": str(chatbot_id),
+                "history": message_history.messages,
+                "question": message
+            },
+            config  # Pasar la configuración aquí
+        )
         
         return response
     
