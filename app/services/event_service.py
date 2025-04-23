@@ -22,11 +22,13 @@ class EventService:
     EVENT_RESPONSE_EVALUATED = "respuesta_evaluada"
     EVENT_LEAD_QUALIFIED = "lead_calificado"
     EVENT_CHATBOT_RESPONSE = "chatbot_respuesta"
+    EVENT_CHATBOT_STATUS_CHANGED = "cambio_estado_chatbot"
     
     # Eventos de Canal
     EVENT_CHANNEL_CONFIG_UPDATED = "configuracion_actualizada"
     EVENT_INTEGRATION_ERROR = "integracion_error"
     EVENT_MESSAGE_RECEIVED = "mensaje_recibido"
+    EVENT_MESSAGE_SENT = "mensaje_enviado"
     EVENT_CHANNEL_INACTIVE = "canal_inactivo"
     
     # Eventos de Lead
@@ -34,6 +36,7 @@ class EventService:
     EVENT_INFO_REQUEST = "solicitud_informacion"
     EVENT_COMPLAINT = "queja"
     EVENT_INACTIVITY = "inactividad"
+    EVENT_LEAD_EVALUATION = "evaluacion_lead"
     
     # Eventos de Agente
     EVENT_AGENT_LOGIN = "login"
