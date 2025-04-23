@@ -5,6 +5,7 @@ from datetime import datetime
 from app.db.supabase_client import supabase
 from app.services.langchain_service import langchain_service
 from app.services.lead_evaluation_service import lead_evaluation_service
+from app.services.event_service import event_service
 
 class ConversationService:
     """Service for handling conversations and messages"""
@@ -47,7 +48,28 @@ class ConversationService:
             result = supabase.table("conversaciones").insert(conversation_data).execute()
             
             if result.data and len(result.data) > 0:
-                return result.data[0]
+                # Registrar evento de creación de conversación
+                conversation = result.data[0]
+                empresa_id = self._get_empresa_id_from_chatbot(chatbot_id)
+                
+                event_service.log_event(
+                    empresa_id=empresa_id,
+                    event_type=event_service.EVENT_CONVERSATION_STARTED,
+                    entidad_origen_tipo="lead",
+                    entidad_origen_id=lead_id,
+                    entidad_destino_tipo="chatbot",
+                    entidad_destino_id=chatbot_id,
+                    lead_id=lead_id,
+                    chatbot_id=chatbot_id,
+                    canal_id=canal_id,
+                    conversacion_id=conversation["id"],
+                    resultado="success",
+                    estado_final="active",
+                    detalle=f"Nueva conversación creada en canal {canal_identificador}",
+                    metadata={"canal_identificador": canal_identificador}
+                )
+                
+                return conversation
             
             raise ValueError("Failed to create conversation")
         except Exception as e:
@@ -122,6 +144,21 @@ class ConversationService:
             # Insertar el token anónimo
             supabase.table("pii_tokens").insert(token_data).execute()
             
+            # Registrar evento de creación de lead - usar primera_interaccion para leads nuevos
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_FIRST_INTERACTION,
+                entidad_origen_tipo="canal",
+                entidad_origen_id=canal_id,
+                lead_id=lead_id,
+                canal_id=canal_id,
+                resultado="success",
+                estado_final="nuevo",
+                valor_score=10,
+                detalle="Nuevo lead creado desde chat",
+                metadata={"canal_origen": "chat", "pipeline_id": pipeline_id, "stage_id": stage_id}
+            )
+            
             return lead
         except Exception as e:
             print(f"Error in get_or_create_lead: {e}")
@@ -167,6 +204,13 @@ class ConversationService:
             # Guardar mensaje sanitizado (independientemente de si el chatbot está activo)
             user_message = langchain_service.save_message(conversation_id, sanitized_mensaje, is_user=True)
             
+            # Registrar evento de mensaje recibido
+            message_event_metadata = {
+                "canal_identificador": canal_identificador,
+                "chatbot_activo": chatbot_activo,
+                "mensaje_length": len(sanitized_mensaje)
+            }
+            
             # Si hay metadata, la sanitizamos antes de guardarla
             if metadata:
                 # Eliminamos cualquier dato personal de los metadatos
@@ -174,43 +218,87 @@ class ConversationService:
                 # Actualizar metadata del mensaje si es necesario
                 if user_message.get("id"):
                     supabase.table("mensajes").update({"metadata": safe_metadata}).eq("id", user_message["id"]).execute()
+                
+                # Agregar metadatos sanitizados al evento
+                message_event_metadata.update(safe_metadata)
+            
+            # Registrar evento de mensaje recibido del lead
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_MESSAGE_RECEIVED,
+                entidad_origen_tipo="lead",
+                entidad_origen_id=lead_id,
+                entidad_destino_tipo="chatbot" if chatbot_activo else None,
+                entidad_destino_id=chatbot_id if chatbot_activo else None,
+                lead_id=lead_id,
+                chatbot_id=chatbot_id,
+                canal_id=canal_id,
+                conversacion_id=conversation_id,
+                mensaje_id=user_message["id"],
+                metadata=message_event_metadata
+            )
             
             # Inicializar variables de respuesta
             response = ""
             bot_message = None
             metadata_response = {"user_message_id": user_message["id"]}
             
+            # Calcular hora de inicio para medir duración
+            start_time = datetime.utcnow()
+            
             # Solo generar respuesta si el chatbot está activo
             if chatbot_activo:
                 try:
                     # Generar respuesta con el mensaje sanitizado
-                    # MODIFICACIÓN: Agregar el configuration con session_id como el ID de la conversación
                     langchain_config = {
                         "configurable": {
                             "session_id": str(conversation_id)
                         }
                     }
                     
-                    # CORRECCIÓN: Necesitamos proveer la variable "id" con formato especial
-                    # El template espera '"id"' (con comillas incluidas en el nombre de la variable)
                     response = langchain_service.generate_response(
                         conversation_id, 
                         chatbot_id, 
                         empresa_id, 
                         sanitized_mensaje,
-                        config=langchain_config,  # Pasar la configuración requerida
-                        special_format=True  # Añadir flag para usar formato especial
+                        config=langchain_config,
+                        special_format=True
                     )
+                    
+                    # Calcular duración de procesamiento
+                    processing_duration = (datetime.utcnow() - start_time).total_seconds()
                     
                     # Guardar respuesta del chatbot solo si no está vacía (si el chatbot está activo)
                     if response:
                         bot_message = langchain_service.save_message(conversation_id, response, is_user=False)
+                        
+                        # Registrar evento de respuesta del chatbot
+                        event_service.log_event(
+                            empresa_id=empresa_id,
+                            event_type=event_service.EVENT_CHATBOT_RESPONSE,
+                            entidad_origen_tipo="chatbot",
+                            entidad_origen_id=chatbot_id,
+                            entidad_destino_tipo="lead",
+                            entidad_destino_id=lead_id,
+                            lead_id=lead_id,
+                            chatbot_id=chatbot_id,
+                            canal_id=canal_id,
+                            conversacion_id=conversation_id,
+                            mensaje_id=bot_message["id"],
+                            duracion_segundos=processing_duration,
+                            resultado="success",
+                            detalle="Respuesta generada correctamente",
+                            metadata={"respuesta_length": len(response)}
+                        )
                         
                         # ENVIAR RESPUESTA AL CANAL (WhatsApp, etc.)
                         from app.services.channel_service import channel_service
                         try:
                             # Agregamos log para debug
                             print(f"Enviando respuesta '{response[:30]}...' a {canal_identificador} en el canal {canal_id}")
+                            
+                            # Registrar hora de inicio para medir duración del envío
+                            send_start_time = datetime.utcnow()
                             
                             channel_response = channel_service.send_message_to_channel(
                                 conversation_id=conversation_id,
@@ -222,6 +310,9 @@ class ConversationService:
                                 }
                             )
                             
+                            # Calcular duración del envío
+                            send_duration = (datetime.utcnow() - send_start_time).total_seconds()
+                            
                             # Agregar la información de envío a los metadatos del mensaje
                             supabase.table("mensajes").update({
                                 "metadata": {
@@ -232,18 +323,70 @@ class ConversationService:
                             
                             metadata_response["channel_delivery"] = channel_response
                             
+                            # Registrar evento de envío de mensaje al canal
+                            event_service.log_event(
+                                empresa_id=empresa_id,
+                                event_type=event_service.EVENT_MESSAGE_SENT,
+                                entidad_origen_tipo="chatbot",
+                                entidad_origen_id=chatbot_id,
+                                entidad_destino_tipo="canal",
+                                entidad_destino_id=canal_id,
+                                lead_id=lead_id,
+                                chatbot_id=chatbot_id,
+                                canal_id=canal_id,
+                                conversacion_id=conversation_id,
+                                mensaje_id=bot_message["id"],
+                                duracion_segundos=send_duration,
+                                resultado="success",
+                                detalle=f"Mensaje enviado a canal {canal_identificador}",
+                                metadata={"canal_identificador": canal_identificador}
+                            )
+                            
                         except Exception as channel_error:
                             print(f"Error al enviar mensaje al canal: {channel_error}")
                             metadata_response["channel_error"] = str(channel_error)
+                            
+                            # Registrar error de envío
+                            event_service.log_event(
+                                empresa_id=empresa_id,
+                                event_type=event_service.EVENT_ERROR_OCCURRED,
+                                entidad_origen_tipo="chatbot",
+                                entidad_origen_id=chatbot_id,
+                                entidad_destino_tipo="canal",
+                                entidad_destino_id=canal_id,
+                                lead_id=lead_id,
+                                chatbot_id=chatbot_id,
+                                canal_id=canal_id,
+                                conversacion_id=conversation_id,
+                                mensaje_id=bot_message["id"],
+                                resultado="error",
+                                detalle=f"Error al enviar mensaje: {str(channel_error)}",
+                                metadata={"error": str(channel_error), "canal_identificador": canal_identificador}
+                            )
                 except Exception as response_error:
                     print(f"Error al generar respuesta: {response_error}")
                     metadata_response["response_error"] = str(response_error)
+                    
+                    # Registrar error de generación de respuesta
+                    event_service.log_event(
+                        empresa_id=empresa_id,
+                        event_type=event_service.EVENT_ERROR_OCCURRED,
+                        entidad_origen_tipo="chatbot",
+                        entidad_origen_id=chatbot_id,
+                        lead_id=lead_id,
+                        chatbot_id=chatbot_id,
+                        canal_id=canal_id,
+                        conversacion_id=conversation_id,
+                        mensaje_id=user_message["id"],
+                        resultado="error",
+                        detalle=f"Error al generar respuesta: {str(response_error)}",
+                        metadata={"error": str(response_error)}
+                    )
                     # Registramos el error pero continuamos para devolver una respuesta válida
             else:
                 metadata_response["chatbot_disabled"] = True
             
             # Iniciar proceso de evaluación en segundo plano solo si el chatbot está activo o si se requiere
-            # No iniciamos la evaluación si el chatbot está desactivado y no es necesario
             if chatbot_activo or metadata.get("evaluate_anyway", False):
                 self._start_async_evaluation(lead_id, conversation_id, UUID(user_message["id"]), empresa_id)
             
@@ -273,6 +416,17 @@ class ConversationService:
             empresa_id: El ID de la empresa
         """
         try:
+            # Registrar evento de inicio de evaluación
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_LEAD_EVALUATION,
+                lead_id=lead_id,
+                conversacion_id=conversacion_id,
+                mensaje_id=mensaje_id,
+                resultado="started",
+                detalle="Iniciando evaluación asincrónica del lead"
+            )
+            
             # En un entorno de producción, aquí se enviaría la tarea a un worker o cola
             # Para esta implementación, ejecutamos directamente pero sin esperar el resultado
             from app.services.lead_evaluation_service import lead_evaluation_service
@@ -289,6 +443,18 @@ class ConversationService:
                     )
                 except Exception as eval_error:
                     print(f"Error en evaluación asíncrona: {eval_error}")
+                    
+                    # Registrar error en la evaluación
+                    event_service.log_event(
+                        empresa_id=empresa_id,
+                        event_type=event_service.EVENT_ERROR_OCCURRED,
+                        lead_id=lead_id,
+                        conversacion_id=conversacion_id,
+                        mensaje_id=mensaje_id,
+                        resultado="error",
+                        detalle=f"Error en evaluación asincrónica: {str(eval_error)}",
+                        metadata={"error": str(eval_error)}
+                    )
             
             # Iniciar la evaluación en un hilo separado
             evaluation_thread = Thread(target=evaluate_in_background)
@@ -298,6 +464,81 @@ class ConversationService:
         except Exception as e:
             print(f"Error al iniciar evaluación asíncrona: {e}")
             # No propagamos la excepción para no bloquear la respuesta
+
+    def toggle_chatbot_status(self, conversacion_id: UUID, chatbot_activo: bool) -> Dict[str, Any]:
+        """
+        Cambia el estado del chatbot en una conversación
+        
+        Args:
+            conversacion_id: El ID de la conversación
+            chatbot_activo: True para activar el chatbot, False para desactivarlo
+            
+        Returns:
+            Datos de la conversación actualizada
+        """
+        try:
+            # Actualizar el estado del chatbot en la base de datos
+            result = supabase.table("conversaciones").update({
+                "chatbot_activo": chatbot_activo
+            }).eq("id", str(conversacion_id)).execute()
+            
+            if result.data and len(result.data) > 0:
+                conversation = result.data[0]
+                
+                # Obtener IDs necesarios para el evento
+                lead_id = conversation.get("lead_id")
+                chatbot_id = conversation.get("chatbot_id")
+                canal_id = conversation.get("canal_id")
+                
+                # Obtener empresa_id desde el chatbot
+                empresa_id = self._get_empresa_id_from_chatbot(chatbot_id)
+                
+                # Registrar evento de cambio de estado
+                event_service.log_event(
+                    empresa_id=empresa_id,
+                    event_type=event_service.EVENT_CHATBOT_STATUS_CHANGED,
+                    entidad_origen_tipo="chatbot",
+                    entidad_origen_id=chatbot_id,
+                    lead_id=lead_id,
+                    chatbot_id=chatbot_id,
+                    canal_id=canal_id,
+                    conversacion_id=conversacion_id,
+                    resultado="success",
+                    estado_final="active" if chatbot_activo else "inactive",
+                    detalle=f"Chatbot {'activado' if chatbot_activo else 'desactivado'} en conversación"
+                )
+                
+                return conversation
+            
+            raise ValueError("No se pudo actualizar el estado del chatbot")
+            
+        except Exception as e:
+            print(f"Error en toggle_chatbot_status: {e}")
+            raise
+            
+    def _get_empresa_id_from_chatbot(self, chatbot_id: UUID) -> UUID:
+        """
+        Obtiene el ID de la empresa a partir del ID del chatbot
+        
+        Args:
+            chatbot_id: El ID del chatbot
+            
+        Returns:
+            El ID de la empresa
+        """
+        try:
+            result = supabase.table("chatbots").select("empresa_id").eq("id", str(chatbot_id)).limit(1).execute()
+            
+            if result.data and len(result.data) > 0:
+                return UUID(result.data[0].get("empresa_id"))
+            
+            # Si no se encuentra, usar un ID por defecto (esto es solo un fallback y debería lograrse)
+            return UUID("00000000-0000-0000-0000-000000000000")
+            
+        except Exception as e:
+            print(f"Error al obtener empresa_id desde chatbot: {e}")
+            # En caso de error, devolver un ID por defecto
+            return UUID("00000000-0000-0000-0000-000000000000")
 
     def sanitize_message(self, mensaje: str) -> str:
         """

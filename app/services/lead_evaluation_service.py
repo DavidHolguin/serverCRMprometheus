@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union, Tuple
 from uuid import UUID
 import json
 import re
@@ -14,6 +14,7 @@ from langchain_core.pydantic_v1 import BaseModel, Field
 from app.core.config import settings
 from app.db.supabase_client import supabase
 from app.services.langchain_service import langchain_service
+from app.services.event_service import event_service
 
 class EvaluacionLead(BaseModel):
     """Modelo para la evaluación de un lead basado en sus mensajes"""
@@ -616,6 +617,23 @@ class LeadEvaluationService:
             Resultado de la evaluación
         """
         try:
+            # Registrar evento de inicio de evaluación detallada
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_LEAD_QUALIFIED,
+                entidad_origen_tipo="lead",
+                entidad_origen_id=lead_id,
+                lead_id=lead_id,
+                conversacion_id=conversacion_id,
+                mensaje_id=mensaje_id,
+                resultado="processing",
+                detalle="Iniciando evaluación LLM del lead",
+                async_processing=False
+            )
+            
+            # Tiempo de inicio para medir duración
+            start_time = datetime.now()
+            
             evaluation_config = self._get_evaluation_config(empresa_id)
             lead_info = self._get_lead_info(lead_id)
             messages = self._get_conversation_messages(conversacion_id)
@@ -708,9 +726,79 @@ class LeadEvaluationService:
                 
                 self._register_lead_intentions(lead_id, conversacion_id, mensaje_id, empresa_id, evaluation)
                 
+                # Actualizar score del lead
                 supabase.table("leads").update({"score": score_calculation["nuevo_score"]}).eq("id", str(lead_id)).execute()
                 
-                return {
+                # Calcular duración del proceso completo
+                duration_seconds = (datetime.now() - start_time).total_seconds()
+                
+                # Registrar evento de cambio de score
+                event_service.log_event(
+                    empresa_id=empresa_id,
+                    event_type=event_service.EVENT_LEAD_STATUS_CHANGED,
+                    entidad_origen_tipo="sistema",
+                    entidad_destino_tipo="lead",
+                    entidad_destino_id=lead_id,
+                    lead_id=lead_id,
+                    conversacion_id=conversacion_id,
+                    mensaje_id=mensaje_id,
+                    valor_score=score_calculation["nuevo_score"],
+                    resultado="success",
+                    detalle=f"Score actualizado: {score_calculation['nuevo_score']}",
+                    metadata={
+                        "score_anterior": lead_info.get("score", 0),
+                        "score_nuevo": score_calculation["nuevo_score"],
+                        "evaluacion_id": evaluation_id,
+                        "score_potencial": evaluation.score_potencial,
+                        "score_satisfaccion": evaluation.score_satisfaccion
+                    },
+                    async_processing=False
+                )
+                
+                # Registrar evento de interés en productos si se detectaron
+                if evaluation.interes_productos:
+                    event_service.log_event(
+                        empresa_id=empresa_id,
+                        event_type=event_service.EVENT_INFO_REQUEST,
+                        entidad_origen_tipo="lead",
+                        entidad_origen_id=lead_id,
+                        lead_id=lead_id,
+                        conversacion_id=conversacion_id,
+                        mensaje_id=mensaje_id,
+                        resultado="success",
+                        detalle=f"Interés en productos detectado: {', '.join(evaluation.interes_productos)}",
+                        metadata={
+                            "productos": evaluation.interes_productos,
+                            "evaluacion_id": evaluation_id
+                        },
+                        async_processing=False
+                    )
+                
+                # Registrar evento de evaluación completada
+                event_service.log_event(
+                    empresa_id=empresa_id,
+                    event_type=event_service.EVENT_LEAD_QUALIFIED,
+                    entidad_origen_tipo="lead",
+                    entidad_origen_id=lead_id,
+                    lead_id=lead_id,
+                    conversacion_id=conversacion_id,
+                    mensaje_id=mensaje_id,
+                    valor_score=score_calculation["nuevo_score"],
+                    duracion_segundos=duration_seconds,
+                    resultado="completed",
+                    detalle=f"Evaluación completada con score {score_calculation['nuevo_score']}",
+                    metadata={
+                        "evaluacion_id": evaluation_id,
+                        "potencial": evaluation.score_potencial,
+                        "satisfaccion": evaluation.score_satisfaccion,
+                        "comentario": evaluation.comentario[:100] if evaluation.comentario else None,
+                        "palabras_clave_count": len(evaluation.palabras_clave),
+                        "productos_detectados": len(evaluation.interes_productos)
+                    },
+                    async_processing=False
+                )
+                
+                result_data = {
                     "id": evaluation_id,
                     "lead_id": str(lead_id),
                     "conversacion_id": str(conversacion_id),
@@ -726,9 +814,41 @@ class LeadEvaluationService:
                     "updated_at": None,
                     "details": score_calculation
                 }
+                
+                return result_data
+            
+            # Si fallamos al guardar la evaluación, registrar el evento de error
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_ERROR_OCCURRED,
+                entidad_origen_tipo="lead",
+                entidad_origen_id=lead_id,
+                lead_id=lead_id,
+                conversacion_id=conversacion_id,
+                mensaje_id=mensaje_id,
+                resultado="error",
+                detalle="Error al guardar la evaluación",
+                async_processing=False
+            )
             
             raise ValueError("Error al guardar la evaluación")
         except Exception as e:
+            # Registrar error en la evaluación
+            event_service.log_event(
+                empresa_id=empresa_id,
+                event_type=event_service.EVENT_ERROR_OCCURRED,
+                entidad_origen_tipo="sistema",
+                entidad_destino_tipo="lead",
+                entidad_destino_id=lead_id,
+                lead_id=lead_id,
+                conversacion_id=conversacion_id,
+                mensaje_id=mensaje_id if mensaje_id else None,
+                resultado="error",
+                detalle=f"Error en evaluate_message: {str(e)}",
+                metadata={"error": str(e)},
+                async_processing=False
+            )
+            
             print(f"Error en evaluate_message: {e}")
             raise
 
