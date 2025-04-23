@@ -21,6 +21,7 @@ class EventService:
     EVENT_INTENT_NOT_RECOGNIZED = "intent_no_reconocido"
     EVENT_RESPONSE_EVALUATED = "respuesta_evaluada"
     EVENT_LEAD_QUALIFIED = "lead_calificado"
+    EVENT_CHATBOT_RESPONSE = "chatbot_respuesta"
     
     # Eventos de Canal
     EVENT_CHANNEL_CONFIG_UPDATED = "configuracion_actualizada"
@@ -49,6 +50,7 @@ class EventService:
     EVENT_AUTOMATION_EXECUTED = "automatizacion_ejecutada"
     EVENT_INTEGRATION_ERROR_SYS = "error_integracion"
     EVENT_BACKUP_COMPLETED = "backup_completado"
+    EVENT_ERROR_OCCURRED = "error_sistema"
     
     # Cache de los tipos de eventos para evitar múltiples consultas
     _event_type_cache = {}
