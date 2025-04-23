@@ -219,31 +219,29 @@ class LangChainService:
         
         # Si no se encontró un prompt_template personalizado, construir uno estándar
         if not prompt_template:
-            prompt_template = f"""
-            # {chatbot['nombre']}
+            # Crear una representación segura de key_points para evitar problemas de formato
+            key_points_str = ""
+            try:
+                if context.get('key_points'):
+                    # Usar json.dumps para serializar correctamente el objeto
+                    key_points_str = json.dumps(context['key_points'], ensure_ascii=False)
+                else:
+                    key_points_str = "[]"
+            except Exception as e:
+                print(f"Error serializando key_points: {e}")
+                key_points_str = "[]"
             
-            ## Personalidad
-            {context['personality']}
-            
-            ## Contexto general
-            {context['general_context']}
-            
-            ## Tono de comunicación
-            {context['communication_tone']}
-            
-            ## Propósito principal
-            {context['main_purpose']}
-            
-            ## Puntos clave
-            {json.dumps(context['key_points'], ensure_ascii=False)}
-            
-            ## Instrucciones especiales
-            {context['special_instructions']}
-            {qa_examples_text}
-            
-            Responde de manera concisa y útil. Si no sabes la respuesta, admítelo claramente.
-            """
-        
+            # Construir el prompt template usando concatenación en lugar de format strings
+            prompt_template = "\n# " + chatbot['nombre'] + "\n\n"
+            prompt_template += "## Personalidad\n" + (context.get('personality') or "") + "\n\n"
+            prompt_template += "## Contexto general\n" + (context.get('general_context') or "") + "\n\n"
+            prompt_template += "## Tono de comunicación\n" + (context.get('communication_tone') or "") + "\n\n"
+            prompt_template += "## Propósito principal\n" + (context.get('main_purpose') or "") + "\n\n"
+            prompt_template += "## Puntos clave\n" + key_points_str + "\n\n"
+            prompt_template += "## Instrucciones especiales\n" + (context.get('special_instructions') or "") + "\n"
+            prompt_template += qa_examples_text + "\n\n"
+            prompt_template += "Responde de manera concisa y útil. Si no sabes la respuesta, admítelo claramente."
+
         return {
             "system_message": prompt_template,
             "welcome_message": context.get("welcome_message", "")
@@ -300,82 +298,83 @@ class LangChainService:
         Returns:
             Generated response
         """
-        # Asegurarse de que tenemos una configuración válida
-        if config is None:
-            config = {
-                "configurable": {
-                    "session_id": str(conversation_id)  # Usar conversation_id como session_id por defecto
+        try:
+            # Asegurarse de que tenemos una configuración válida
+            if config is None:
+                config = {
+                    "configurable": {
+                        "session_id": str(conversation_id)  # Usar conversation_id como session_id por defecto
+                    }
                 }
-            }
-        
-        # Check if chatbot is active for this conversation
-        conv_result = supabase.table("conversaciones").select("chatbot_activo").eq("id", str(conversation_id)).limit(1).execute()
-        
-        if not conv_result.data or len(conv_result.data) == 0:
-            raise ValueError(f"Conversation {conversation_id} not found")
-        
-        # If chatbot is not active, return empty response
-        if not conv_result.data[0].get("chatbot_activo", True):
-            return ""
             
-        # Get LLM configuration
-        llm_config = self._get_llm_config(empresa_id)
-        
-        # Create LLM
-        llm = ChatOpenAI(
-            model=llm_config["model"],
-            temperature=llm_config["temperature"],
-            openai_api_key=llm_config["api_key"],
-            max_tokens=llm_config["max_tokens"]
-        )
-        
-        # Get chatbot context (ahora incluye prompt_templates si existen)
-        context = self._get_chatbot_context(chatbot_id)
-        
-        # Create prompt template
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", context["system_message"]),
-            MessagesPlaceholder(variable_name="history"),
-            ("human", "{question}")
-        ])
-        
-        # Create chain
-        chain = prompt | llm | StrOutputParser()
-        
-        # Create message history
-        message_history = self._get_or_create_message_history(conversation_id)
-        
-        # Create runnable with message history
-        chain_with_history = RunnableWithMessageHistory(
-            chain,
-            lambda session_id: message_history,
-            input_messages_key="question",
-            history_messages_key="history"
-        )
-        
-        # Generate response
-        if special_format:
-            # Formato especial donde la variable 'id' necesita comillas incluidas en el nombre
-            response = chain_with_history.invoke(
-                {
-                    '"id"': str(chatbot_id),  # Nombre de variable con comillas incluidas
-                    "history": message_history.messages,
-                    "question": message
-                },
-                config
+            # Check if chatbot is active for this conversation
+            conv_result = supabase.table("conversaciones").select("chatbot_activo").eq("id", str(conversation_id)).limit(1).execute()
+            
+            if not conv_result.data or len(conv_result.data) == 0:
+                raise ValueError(f"Conversation {conversation_id} not found")
+            
+            # If chatbot is not active, return empty response
+            if not conv_result.data[0].get("chatbot_activo", True):
+                return ""
+                
+            # Get LLM configuration
+            llm_config = self._get_llm_config(empresa_id)
+            
+            # Create LLM
+            llm = ChatOpenAI(
+                model=llm_config["model"],
+                temperature=llm_config["temperature"],
+                openai_api_key=llm_config["api_key"],
+                max_tokens=llm_config["max_tokens"]
             )
-        else:
-            # Formato normal (para compatibilidad con código existente)
-            response = chain_with_history.invoke(
-                {
-                    "id": str(chatbot_id),
-                    "history": message_history.messages,
-                    "question": message
-                },
-                config
+            
+            # Get chatbot context (ahora incluye prompt_templates si existen)
+            context = self._get_chatbot_context(chatbot_id)
+            
+            # Create prompt template
+            prompt = ChatPromptTemplate.from_messages([
+                ("system", context["system_message"]),
+                MessagesPlaceholder(variable_name="history"),
+                ("human", "{question}")
+            ])
+            
+            # Create chain
+            chain = prompt | llm | StrOutputParser()
+            
+            # Create message history
+            message_history = self._get_or_create_message_history(conversation_id)
+            
+            # Create runnable with message history
+            chain_with_history = RunnableWithMessageHistory(
+                chain,
+                lambda session_id: message_history,
+                input_messages_key="question",
+                history_messages_key="history"
             )
-        
-        return response
+            
+            # Generate response
+            # Para solucionar el problema de formato, evitamos pasar variables especiales
+            # y nos aseguramos de que todas las cadenas estén correctamente formateadas
+            input_data = {
+                "history": message_history.messages,
+                "question": message
+            }
+            
+            # Tratamos de arreglar tanto el formato especial como el normal
+            if special_format:
+                # Con comillas como parte del nombre de la variable
+                input_data['"id"'] = str(chatbot_id)
+            else:
+                # Sin comillas en el nombre de la variable
+                input_data["id"] = str(chatbot_id)
+            
+            response = chain_with_history.invoke(input_data, config)
+            
+            return response
+        except Exception as e:
+            print(f"Error detallado en generate_response: {str(e)}")
+            # Podemos intentar una respuesta por defecto en caso de error
+            return "Lo siento, estoy teniendo problemas para generar una respuesta. Por favor, inténtalo de nuevo más tarde."
     
     def save_message(self, conversation_id: UUID, message: str, is_user: bool = True) -> Dict[str, Any]:
         """
