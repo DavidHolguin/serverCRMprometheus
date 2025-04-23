@@ -344,10 +344,11 @@ class LangChainService:
         )
         
         # Generate response
-        response = chain_with_history.invoke(
-            {"question": message},
-            config={"configurable": {"session_id": str(conversation_id)}}
-        )
+        response = chain_with_history.invoke({
+            "id": str(chatbot_id),  # Asegurarnos de pasar el ID como se espera
+            "history": message_history.messages,
+            "question": message
+        })
         
         return response
     

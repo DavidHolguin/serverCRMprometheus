@@ -37,9 +37,11 @@ class ChannelMessageRequest(BaseModel):
     lead_id: Optional[UUID4] = Field(None, description="ID of the lead (optional)")
     mensaje: str = Field(..., description="Message content")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    conversacion_id: Optional[UUID4] = Field(None, description="ID of an existing conversation (optional)")
     
     # Channel-specific identifiers (only one will be used based on the channel)
     session_id: Optional[str] = Field(None, description="Session ID for web channel")
+    website_url: Optional[str] = Field(None, description="Website URL for web channel")
     phone_number: Optional[str] = Field(None, description="Phone number for WhatsApp channel")
     sender_id: Optional[str] = Field(None, description="Sender ID for Messenger channel")
     chat_id: Optional[str] = Field(None, description="Chat ID for Telegram channel")

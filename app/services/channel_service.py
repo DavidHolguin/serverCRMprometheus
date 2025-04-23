@@ -74,7 +74,7 @@ class ChannelService:
                 response = self._send_messenger_message(configuracion, canal_identificador, message)
             elif channel_type == "instagram":
                 response = self._send_instagram_message(configuracion, canal_identificador, message)
-            elif channel_type == "web" or channel_type == "webchat" or channel_type == "sitio_web":
+            elif channel_type == "web" or channel_type == "webchat" or channel_type == "sitio_web" or channel_type == "website":
                 # Web messages are handled by the client polling the API
                 response = {"success": True, "info": "Web messages are handled by client polling"}
             else:
