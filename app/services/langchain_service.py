@@ -179,6 +179,52 @@ class LangChainService:
                     qa_examples_text += f"\nPregunta {i+1}: {example['pregunta']}\n"
                     qa_examples_text += f"Respuesta {i+1}: {example['respuesta']}\n"
         
+        # Formatear los key_points de manera segura
+        key_points_text = "[]"
+        try:
+            # Manejo seguro de key_points
+            key_points = context.get('key_points', [])
+            if key_points:
+                # Si es una cadena (posiblemente JSON), intentamos analizarla
+                if isinstance(key_points, str):
+                    try:
+                        key_points = json.loads(key_points)
+                    except:
+                        key_points = []
+                
+                # Si es una lista, intentamos formatearla como texto
+                if isinstance(key_points, list):
+                    key_points_items = []
+                    for i, point in enumerate(key_points):
+                        if isinstance(point, dict):
+                            # Si es un diccionario, extraemos valores específicos si existen
+                            if "text" in point:
+                                key_points_items.append(f"- {point['text']}")
+                            elif "title" in point:
+                                key_points_items.append(f"- {point['title']}")
+                            else:
+                                # Si no tiene text o title, lo convertimos a cadena de manera segura
+                                try:
+                                    key_points_items.append(f"- Punto {i+1}: {json.dumps(point, ensure_ascii=False)}")
+                                except:
+                                    key_points_items.append(f"- Punto {i+1}")
+                        elif isinstance(point, str):
+                            key_points_items.append(f"- {point}")
+                        else:
+                            key_points_items.append(f"- Punto {i+1}")
+                    
+                    # Unir los puntos en un texto formateado
+                    key_points_text = "\n".join(key_points_items)
+                else:
+                    # Si no es una lista ni una cadena, lo convertimos a cadena JSON
+                    try:
+                        key_points_text = json.dumps(key_points, ensure_ascii=False)
+                    except:
+                        key_points_text = "[]"
+        except Exception as e:
+            print(f"Error procesando key_points: {e}")
+            key_points_text = "[]"
+        
         # Verificar si hay un prompt_template_id en el contexto
         prompt_template_id = context.get("prompt_template")
         prompt_template = None
@@ -200,44 +246,28 @@ class LangChainService:
                     
                     # Reemplazar variables estándar
                     prompt_template = prompt_template.replace("{{chatbot_name}}", chatbot['nombre'])
-                    prompt_template = prompt_template.replace("{{personality}}", context['personality'] or "")
-                    prompt_template = prompt_template.replace("{{general_context}}", context['general_context'] or "")
-                    prompt_template = prompt_template.replace("{{communication_tone}}", context['communication_tone'] or "")
-                    prompt_template = prompt_template.replace("{{main_purpose}}", context['main_purpose'] or "")
-                    prompt_template = prompt_template.replace("{{special_instructions}}", context['special_instructions'] or "")
+                    prompt_template = prompt_template.replace("{{personality}}", context.get('personality') or "")
+                    prompt_template = prompt_template.replace("{{general_context}}", context.get('general_context') or "")
+                    prompt_template = prompt_template.replace("{{communication_tone}}", context.get('communication_tone') or "")
+                    prompt_template = prompt_template.replace("{{main_purpose}}", context.get('main_purpose') or "")
+                    prompt_template = prompt_template.replace("{{special_instructions}}", context.get('special_instructions') or "")
                     prompt_template = prompt_template.replace("{{qa_examples}}", qa_examples_text)
                     
-                    # Manejo especial para key_points que es un array/objeto
-                    try:
-                        key_points_str = json.dumps(context['key_points'], ensure_ascii=False) if context.get('key_points') else "[]"
-                        prompt_template = prompt_template.replace("{{key_points}}", key_points_str)
-                    except:
-                        prompt_template = prompt_template.replace("{{key_points}}", "[]")
+                    # Usando la versión segura de key_points
+                    prompt_template = prompt_template.replace("{{key_points}}", key_points_text)
             except Exception as e:
                 print(f"Error obteniendo prompt template: {e}")
                 # Si hay un error, se usará el formato predeterminado
         
         # Si no se encontró un prompt_template personalizado, construir uno estándar
         if not prompt_template:
-            # Crear una representación segura de key_points para evitar problemas de formato
-            key_points_str = ""
-            try:
-                if context.get('key_points'):
-                    # Usar json.dumps para serializar correctamente el objeto
-                    key_points_str = json.dumps(context['key_points'], ensure_ascii=False)
-                else:
-                    key_points_str = "[]"
-            except Exception as e:
-                print(f"Error serializando key_points: {e}")
-                key_points_str = "[]"
-            
             # Construir el prompt template usando concatenación en lugar de format strings
             prompt_template = "\n# " + chatbot['nombre'] + "\n\n"
             prompt_template += "## Personalidad\n" + (context.get('personality') or "") + "\n\n"
             prompt_template += "## Contexto general\n" + (context.get('general_context') or "") + "\n\n"
             prompt_template += "## Tono de comunicación\n" + (context.get('communication_tone') or "") + "\n\n"
             prompt_template += "## Propósito principal\n" + (context.get('main_purpose') or "") + "\n\n"
-            prompt_template += "## Puntos clave\n" + key_points_str + "\n\n"
+            prompt_template += "## Puntos clave\n" + key_points_text + "\n\n"
             prompt_template += "## Instrucciones especiales\n" + (context.get('special_instructions') or "") + "\n"
             prompt_template += qa_examples_text + "\n\n"
             prompt_template += "Responde de manera concisa y útil. Si no sabes la respuesta, admítelo claramente."
