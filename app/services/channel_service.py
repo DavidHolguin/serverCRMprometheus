@@ -51,17 +51,21 @@ class ChannelService:
             channel_type = channel["tipo"]
             
             # Primero intentamos obtener la configuración de chatbot_canales usando la relación precisa
-            # entre empresa, chatbot y canal
-            chatbot_channel_result = supabase.table("chatbot_canales").select("*") \
-                .eq("canal_id", str(canal_id)) \
-                .eq("chatbot_id", str(chatbot_id)) \
-                .eq("empresa_id", conversation.get("empresa_id")) \
-                .eq("is_active", True) \
-                .limit(1) \
-                .execute()
-                
+            # entre empresa, chatbot y canal, pero solo si empresa_id existe y no es None
+            empresa_id = conversation.get("empresa_id")
+            chatbot_channel_result = None
+            
+            if empresa_id is not None and empresa_id != "None":
+                chatbot_channel_result = supabase.table("chatbot_canales").select("*") \
+                    .eq("canal_id", str(canal_id)) \
+                    .eq("chatbot_id", str(chatbot_id)) \
+                    .eq("empresa_id", empresa_id) \
+                    .eq("is_active", True) \
+                    .limit(1) \
+                    .execute()
+                    
             # Si no encontramos configuración específica para la empresa, buscamos sin filtrar por empresa
-            if not chatbot_channel_result.data or len(chatbot_channel_result.data) == 0:
+            if not chatbot_channel_result or not chatbot_channel_result.data or len(chatbot_channel_result.data) == 0:
                 chatbot_channel_result = supabase.table("chatbot_canales").select("*") \
                     .eq("canal_id", str(canal_id)) \
                     .eq("chatbot_id", str(chatbot_id)) \

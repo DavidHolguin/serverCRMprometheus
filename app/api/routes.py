@@ -466,10 +466,33 @@ async def agent_send_message(request: AgentMessageRequest = Body(...)):
             if not request.lead_id:
                 raise ValueError("Debe proporcionar conversation_id o lead_id")
                 
-            if not request.channel_id or not request.channel_identifier or not request.chatbot_id or not request.empresa_id:
-                raise ValueError("Para crear una nueva conversación debe proporcionar lead_id, channel_id, channel_identifier, chatbot_id y empresa_id")
+            # Verificar si tenemos chatbot_canal_id o los datos necesarios para crear una conversación
+            if request.chatbot_canal_id:
+                # Obtener la información de canal usando chatbot_canal_id
+                from app.services.channel_service import channel_service
+                
+                try:
+                    config = channel_service.get_chatbot_channel_config(request.chatbot_canal_id)
+                    canal_id = UUID(config["canal_id"])
+                    chatbot_id = UUID(config["chatbot_id"])
+                    empresa_id = UUID(config["empresa_id"])
+                except Exception as e:
+                    raise ValueError(f"Error al obtener configuración del canal: {str(e)}")
+            elif not request.channel_identifier or not request.chatbot_id or not request.empresa_id:
+                raise ValueError("Para crear una nueva conversación debe proporcionar lead_id, chatbot_canal_id o la combinación de channel_identifier, chatbot_id y empresa_id")
+            else:
+                # Usar los valores proporcionados directamente
+                chatbot_id = request.chatbot_id
+                empresa_id = request.empresa_id
+                
+                # Buscar el canal_id basado en los datos del request
+                # Este es un ejemplo, deberías adaptarlo según tu lógica
+                channel_result = supabase.table("canales").select("*").eq("tipo", "web").limit(1).execute()
+                if not channel_result.data:
+                    raise ValueError("No se pudo determinar el canal")
+                canal_id = UUID(channel_result.data[0]["id"])
             
-            logger.info(f"Verificando conversación existente para lead {request.lead_id} en canal {request.channel_id}")
+            logger.info(f"Verificando conversación existente para lead {request.lead_id}")
             
             # Verificar si el lead existe
             lead_result = supabase.table("leads").select("*").eq("id", str(request.lead_id)).limit(1).execute()
@@ -480,7 +503,7 @@ async def agent_send_message(request: AgentMessageRequest = Body(...)):
             # Verificar si ya existe una conversación para este lead en este canal
             conversation_result = supabase.table("conversaciones").select("*")\
                 .eq("lead_id", str(request.lead_id))\
-                .eq("canal_id", str(request.channel_id))\
+                .eq("canal_id", str(canal_id))\
                 .order("created_at", desc=True)\
                 .limit(1)\
                 .execute()
@@ -491,12 +514,12 @@ async def agent_send_message(request: AgentMessageRequest = Body(...)):
                 logger.info(f"Usando conversación existente {conversation_id}")
             else:
                 # Crear una nueva conversación
-                logger.info(f"Creando nueva conversación para lead {request.lead_id} en canal {request.channel_id}")
+                logger.info(f"Creando nueva conversación para lead {request.lead_id}")
                 
                 new_conversation = {
                     "lead_id": str(request.lead_id),
-                    "chatbot_id": str(request.chatbot_id),
-                    "canal_id": str(request.channel_id),
+                    "chatbot_id": str(chatbot_id),
+                    "canal_id": str(canal_id),
                     "canal_identificador": request.channel_identifier,
                     "estado": "activa",
                     "chatbot_activo": not request.deactivate_chatbot,  # Configuración inicial del chatbot
@@ -521,13 +544,7 @@ async def agent_send_message(request: AgentMessageRequest = Body(...)):
             
             if not conv_result.data:
                 raise ValueError(f"Conversación con ID {conversation_id} no encontrada")
-            
-            # Si se proporciona channel_id o channel_identifier, verificar que coincidan con la conversación
-            if request.channel_id:
-                conversation_canal_id = UUID(conv_result.data[0]["canal_id"])
-                if request.channel_id != conversation_canal_id:
-                    logger.warning(f"El channel_id proporcionado ({request.channel_id}) no coincide con el canal de la conversación ({conversation_canal_id})")
-            
+        
         # Usar el servicio de canal para enviar el mensaje
         from app.services.channel_service import channel_service
         
