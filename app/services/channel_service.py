@@ -39,6 +39,7 @@ class ChannelService:
             conversation = conv_result.data[0]
             canal_id = UUID(conversation["canal_id"])
             canal_identificador = conversation["canal_identificador"]
+            chatbot_id = UUID(conversation["chatbot_id"])
             
             # Get channel details
             channel_result = supabase.table("canales").select("*").eq("id", str(canal_id)).limit(1).execute()
@@ -49,14 +50,25 @@ class ChannelService:
             channel = channel_result.data[0]
             channel_type = channel["tipo"]
             
-            # Get chatbot channel configuration
-            chatbot_id = UUID(conversation["chatbot_id"])
+            # Primero intentamos obtener la configuración de chatbot_canales usando la relación precisa
+            # entre empresa, chatbot y canal
             chatbot_channel_result = supabase.table("chatbot_canales").select("*") \
                 .eq("canal_id", str(canal_id)) \
                 .eq("chatbot_id", str(chatbot_id)) \
+                .eq("empresa_id", conversation.get("empresa_id")) \
                 .eq("is_active", True) \
+                .limit(1) \
                 .execute()
                 
+            # Si no encontramos configuración específica para la empresa, buscamos sin filtrar por empresa
+            if not chatbot_channel_result.data or len(chatbot_channel_result.data) == 0:
+                chatbot_channel_result = supabase.table("chatbot_canales").select("*") \
+                    .eq("canal_id", str(canal_id)) \
+                    .eq("chatbot_id", str(chatbot_id)) \
+                    .eq("is_active", True) \
+                    .limit(1) \
+                    .execute()
+            
             if not chatbot_channel_result.data or len(chatbot_channel_result.data) == 0:
                 raise ValueError(f"No active chatbot configuration found for channel {channel_type}")
             
@@ -84,7 +96,8 @@ class ChannelService:
                 "success": True,
                 "channel_type": channel_type,
                 "channel_identifier": canal_identificador,
-                "response": response
+                "response": response,
+                "chatbot_canal_id": chatbot_channel.get("id")
             }
             
         except Exception as e:
@@ -436,6 +449,120 @@ class ChannelService:
         except Exception as e:
             logger.error(f"Error al intentar descubrir Phone Number ID: {e}", exc_info=True)
             return None
+
+    def get_chatbot_channel_config(self, chatbot_canal_id: UUID) -> Dict[str, Any]:
+        """
+        Obtiene la configuración completa de un canal de chatbot usando chatbot_canal_id
+        
+        Args:
+            chatbot_canal_id: ID de la relación chatbot-canal
+            
+        Returns:
+            Diccionario con la información completa de configuración
+        """
+        try:
+            # Verificar primero si el chatbot_canal_id existe
+            exist_check = supabase.table("chatbot_canales").select("id").eq("id", str(chatbot_canal_id)).limit(1).execute()
+            
+            if not exist_check.data or len(exist_check.data) == 0:
+                logger.warning(f"Configuración de chatbot-canal con ID {chatbot_canal_id} no encontrada")
+                
+                # Intentar encontrar alguna configuración activa para usar como fallback
+                fallback = supabase.table("chatbot_canales").select("id").eq("is_active", True).limit(1).execute()
+                
+                if fallback.data and len(fallback.data) > 0:
+                    fallback_id = fallback.data[0]["id"]
+                    logger.info(f"Usando configuración alternativa: {fallback_id}")
+                    chatbot_canal_id = UUID(fallback_id)
+                else:
+                    raise ValueError(f"Configuración de canal con ID {chatbot_canal_id} no encontrada y no hay alternativas disponibles")
+            
+            # Obtener la configuración del canal del chatbot con relaciones
+            result = supabase.table("chatbot_canales").select(
+                "*, canales(*), chatbots(*)"
+            ).eq("id", str(chatbot_canal_id)).limit(1).execute()
+            
+            if not result.data or len(result.data) == 0:
+                raise ValueError(f"Configuración de canal con ID {chatbot_canal_id} no encontrada")
+            
+            chatbot_canal = result.data[0]
+            
+            # Extraer información relevante
+            canal = chatbot_canal.get("canales", {})
+            chatbot = chatbot_canal.get("chatbots", {})
+            
+            return {
+                "chatbot_canal_id": chatbot_canal.get("id"),
+                "chatbot_id": chatbot_canal.get("chatbot_id"),
+                "canal_id": chatbot_canal.get("canal_id"),
+                "empresa_id": chatbot_canal.get("empresa_id"),
+                "configuracion": chatbot_canal.get("configuracion", {}),
+                "canal_tipo": canal.get("tipo"),
+                "canal_nombre": canal.get("nombre"),
+                "chatbot_nombre": chatbot.get("nombre"),
+                "is_active": chatbot_canal.get("is_active", True),
+                "webhook_url": chatbot_canal.get("webhook_url"),
+                "webhook_secret": chatbot_canal.get("webhook_secret")
+            }
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración de chatbot-canal: {e}", exc_info=True)
+            raise
+
+    def process_message_by_chatbot_channel(self, chatbot_canal_id: UUID, canal_identificador: str, 
+                                mensaje: str, lead_id: Optional[UUID] = None,
+                                metadata: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Procesa un mensaje utilizando directamente el ID de chatbot_canales
+        
+        Args:
+            chatbot_canal_id: ID de la relación chatbot-canal
+            canal_identificador: Identificador del canal (teléfono, chat ID, etc.)
+            mensaje: Contenido del mensaje
+            lead_id: ID del lead (opcional)
+            metadata: Metadatos adicionales (opcional)
+            
+        Returns:
+            Diccionario con la respuesta, incluyendo mensaje_id, conversacion_id y respuesta
+        """
+        try:
+            # Obtener configuración completa del canal-chatbot
+            config = self.get_chatbot_channel_config(chatbot_canal_id)
+            
+            if not config:
+                raise ValueError(f"No se encontró configuración para chatbot_canal_id {chatbot_canal_id}")
+                
+            # Extraer los IDs necesarios para procesar el mensaje
+            canal_id = UUID(config["canal_id"])
+            chatbot_id = UUID(config["chatbot_id"])
+            empresa_id = UUID(config["empresa_id"])
+            
+            # Incluir el chatbot_canal_id en los metadatos para futuras referencias
+            full_metadata = {
+                "chatbot_canal_id": str(chatbot_canal_id),
+                **(metadata or {})
+            }
+            
+            # Usar el servicio de conversación para procesar el mensaje
+            from app.services.conversation_service import conversation_service
+            
+            result = conversation_service.process_channel_message(
+                canal_id=canal_id,
+                canal_identificador=canal_identificador,
+                empresa_id=empresa_id,
+                chatbot_id=chatbot_id,
+                mensaje=mensaje,
+                lead_id=lead_id,
+                metadata=full_metadata
+            )
+            
+            # Añadir información adicional al resultado
+            result["chatbot_canal_id"] = str(chatbot_canal_id)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error al procesar mensaje por chatbot_canal_id: {e}", exc_info=True)
+            raise
 
 # Create singleton instance
 channel_service = ChannelService()

@@ -30,23 +30,18 @@ class MessageResponse(MessageInDB):
 
 class ChannelMessageRequest(BaseModel):
     """Model for incoming channel message requests"""
-    canal_id: UUID4 = Field(..., description="ID of the channel")
-    canal_identificador: str = Field(..., description="Channel identifier (e.g., phone number, chat ID)")
-    empresa_id: UUID4 = Field(..., description="ID of the company")
-    chatbot_id: UUID4 = Field(..., description="ID of the chatbot")
-    lead_id: Optional[UUID4] = Field(None, description="ID of the lead (optional)")
-    mensaje: str = Field(..., description="Message content")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
-    conversacion_id: Optional[UUID4] = Field(None, description="ID of an existing conversation (optional)")
+    # Campo principal para identificación de canal-chatbot (obligatorio)
+    chatbot_canal_id: UUID4 = Field(..., description="ID de chatbot_canales que relaciona chatbot, canal y empresa")
     
-    # Channel-specific identifiers (only one will be used based on the channel)
-    session_id: Optional[str] = Field(None, description="Session ID for web channel")
-    website_url: Optional[str] = Field(None, description="Website URL for web channel")
-    phone_number: Optional[str] = Field(None, description="Phone number for WhatsApp channel")
-    sender_id: Optional[str] = Field(None, description="Sender ID for Messenger channel")
-    chat_id: Optional[str] = Field(None, description="Chat ID for Telegram channel")
-    instagram_id: Optional[str] = Field(None, description="Instagram ID for Instagram channel")
+    # Campos requeridos siempre
+    canal_identificador: str = Field(..., description="Identificador del canal (ej: número de teléfono, chat ID)")
+    mensaje: str = Field(..., description="Contenido del mensaje")
     
+    # Campos opcionales
+    lead_id: Optional[UUID4] = Field(None, description="ID del lead (opcional)")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Metadatos adicionales")
+    conversacion_id: Optional[UUID4] = Field(None, description="ID de una conversación existente (opcional)")
+
 class ChannelMessageResponse(BaseModel):
     """Model for channel message responses"""
     mensaje_id: UUID4
@@ -62,9 +57,12 @@ class AgentMessageRequest(BaseModel):
     # Campos para conversación existente
     conversation_id: Optional[UUID4] = Field(None, description="ID de la conversación existente (opcional)")
     
-    # Campos para nueva conversación o mensajes directos
+    # Nuevo campo para relación chatbot-canal
+    chatbot_canal_id: Optional[UUID4] = Field(None, description="ID de chatbot_canales que relaciona chatbot, canal y empresa")
+    
+    # Campos para nueva conversación o mensajes directos (opcionales si se proporciona chatbot_canal_id)
     lead_id: Optional[UUID4] = Field(None, description="ID del lead para iniciar nueva conversación (opcional)")
-    channel_id: Optional[UUID4] = Field(None, description="ID del canal a utilizar")
+  
     channel_identifier: Optional[str] = Field(None, description="Identificador del canal (teléfono, chat ID, etc.)")
     chatbot_id: Optional[UUID4] = Field(None, description="ID del chatbot para asociar a la conversación")
     empresa_id: Optional[UUID4] = Field(None, description="ID de la empresa")
@@ -78,17 +76,57 @@ class AgentMessageRequest(BaseModel):
         if 'conversation_id' in values and values['conversation_id'] is None and 'lead_id' in values and values['lead_id'] is None:
             raise ValueError("Debe proporcionar conversation_id o lead_id")
         return v
+        
+    @validator('chatbot_canal_id', 'chatbot_id', 'empresa_id')
+    def validate_channel_chatbot(cls, v, values, **kwargs):
+        field = kwargs.get('field')
+        
+        # Si se proporciona conversation_id, no necesitamos validar estos campos
+        if 'conversation_id' in values and values['conversation_id'] is not None:
+            return v
+            
+        # Si se está validando chatbot_canal_id y no está presente
+        if field is not None and field.name == 'chatbot_canal_id' and v is None:
+            # Solo validamos si estamos creando una nueva conversación
+            if 'lead_id' in values and values['lead_id'] is not None:
+                # Entonces verificamos que estén presentes chatbot_id y empresa_id
+                if ('chatbot_id' not in values or values['chatbot_id'] is None) or \
+                   ('empresa_id' not in values or values['empresa_id'] is None) or \
+                   ('channel_identifier' not in values or values['channel_identifier'] is None):
+                    raise ValueError("Para nueva conversación debe proporcionar chatbot_canal_id o la combinación de chatbot_id, empresa_id y channel_identifier")
+                
+        return v
 
 class AgentDirectMessageRequest(BaseModel):
     """Model for direct agent message requests to a lead without an existing conversation"""
-    agent_id: UUID4 = Field(..., description="ID of the agent sending the message")
-    lead_id: UUID4 = Field(..., description="ID of the lead to message")
-    channel_id: UUID4 = Field(..., description="Channel ID to use for sending the message")
-    channel_identifier: str = Field(..., description="Channel identifier (phone number, chat ID, etc.)")
-    mensaje: str = Field(..., description="Message content")
-    chatbot_id: UUID4 = Field(..., description="ID of the chatbot to associate with the conversation")
-    empresa_id: UUID4 = Field(..., description="ID of the company")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    agent_id: UUID4 = Field(..., description="ID del agente que envía el mensaje")
+    lead_id: UUID4 = Field(..., description="ID del lead al que se envía el mensaje")
+    mensaje: str = Field(..., description="Contenido del mensaje")
+    
+    # Nuevo campo para relación chatbot-canal
+    chatbot_canal_id: Optional[UUID4] = Field(None, description="ID de chatbot_canales que relaciona chatbot, canal y empresa")
+    
+    # Campos originales (ahora opcionales si se proporciona chatbot_canal_id)
+    channel_id: Optional[UUID4] = Field(None, description="ID del canal a utilizar (opcional si se proporciona chatbot_canal_id)")
+    channel_identifier: str = Field(..., description="Identificador del canal (teléfono, chat ID, etc.)")
+    chatbot_id: Optional[UUID4] = Field(None, description="ID del chatbot para asociar a la conversación (opcional si se proporciona chatbot_canal_id)")
+    empresa_id: Optional[UUID4] = Field(None, description="ID de la empresa (opcional si se proporciona chatbot_canal_id)")
+    
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Metadatos adicionales")
+    
+    @validator('chatbot_canal_id', 'channel_id', 'chatbot_id', 'empresa_id')
+    def validate_required_ids(cls, v, values, **kwargs):
+        field = kwargs.get('field')
+        
+        # Verificar si field existe y si estamos validando chatbot_canal_id
+        if field is not None and field.name == 'chatbot_canal_id' and v is None:
+            # Entonces verificamos que estén presentes channel_id, chatbot_id y empresa_id
+            if ('channel_id' not in values or values['channel_id'] is None) or \
+               ('chatbot_id' not in values or values['chatbot_id'] is None) or \
+               ('empresa_id' not in values or values['empresa_id'] is None):
+                raise ValueError("Debe proporcionar chatbot_canal_id o la combinación de channel_id, chatbot_id y empresa_id")
+        
+        return v
 
 class ToggleChatbotRequest(BaseModel):
     """Model for toggling chatbot status"""

@@ -47,15 +47,28 @@ async def process_message(request: ChannelMessageRequest):
         The response message
     """
     try:
-        response = conversation_service.process_channel_message(
-            canal_id=request.canal_id,
-            canal_identificador=request.canal_identificador,
-            empresa_id=request.empresa_id,
-            chatbot_id=request.chatbot_id,
-            mensaje=request.mensaje,
-            lead_id=request.lead_id,
-            metadata=request.metadata
-        )
+        # Si se proporciona chatbot_canal_id, usar process_message_by_chatbot_channel
+        if request.chatbot_canal_id:
+            from app.services.channel_service import channel_service
+            
+            response = channel_service.process_message_by_chatbot_channel(
+                chatbot_canal_id=request.chatbot_canal_id,
+                canal_identificador=request.canal_identificador,
+                mensaje=request.mensaje,
+                lead_id=request.lead_id,
+                metadata=request.metadata
+            )
+        else:
+            # Método tradicional usando canal_id, empresa_id y chatbot_id
+            response = conversation_service.process_channel_message(
+                canal_id=request.canal_id,
+                canal_identificador=request.canal_identificador,
+                empresa_id=request.empresa_id,
+                chatbot_id=request.chatbot_id,
+                mensaje=request.mensaje,
+                lead_id=request.lead_id,
+                metadata=request.metadata
+            )
         
         return ChannelMessageResponse(
             mensaje_id=response["mensaje_id"],
