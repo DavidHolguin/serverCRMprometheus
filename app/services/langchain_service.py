@@ -155,17 +155,33 @@ class LangChainService:
         chatbot_result = supabase.table("chatbots").select("*").eq("id", str(chatbot_id)).execute()
         
         if not chatbot_result.data or len(chatbot_result.data) == 0:
-            raise ValueError(f"Chatbot with ID {chatbot_id} not found")
+            # En lugar de lanzar una excepción, creamos un contexto predeterminado
+            print(f"Chatbot con ID {chatbot_id} no encontrado, usando contexto predeterminado")
+            return {
+                "system_message": "Eres un asistente virtual útil. Responde de manera amable y profesional.",
+                "welcome_message": "¡Hola! ¿En qué puedo ayudarte hoy?"
+            }
         
         chatbot = chatbot_result.data[0]
         
         # Get chatbot context
         context_result = supabase.table("chatbot_contextos").select("*").eq("chatbot_id", str(chatbot_id)).eq("tipo", "general").execute()
         
+        # Si no hay contexto específico, crear uno predeterminado basado en la información del chatbot
         if not context_result.data or len(context_result.data) == 0:
-            raise ValueError(f"Context for chatbot with ID {chatbot_id} not found")
-        
-        context = context_result.data[0]
+            print(f"Contexto para chatbot con ID {chatbot_id} no encontrado, usando información del chatbot")
+            # Usamos la información básica del chatbot para crear un contexto
+            context = {
+                "welcome_message": chatbot.get('nombre', "Asistente"),
+                "personality": chatbot.get('personalidad', "Servicial y amable"),
+                "general_context": chatbot.get('contexto', ""),
+                "communication_tone": chatbot.get('tono', "Profesional"),
+                "main_purpose": "Ayudar a los usuarios",
+                "key_points": [],
+                "special_instructions": chatbot.get('instrucciones', "")
+            }
+        else:
+            context = context_result.data[0]
         
         # Verificar si hay ejemplos de Q&A en el contexto
         qa_examples = context.get("qa_examples", [])
@@ -341,70 +357,79 @@ class LangChainService:
             conv_result = supabase.table("conversaciones").select("chatbot_activo").eq("id", str(conversation_id)).limit(1).execute()
             
             if not conv_result.data or len(conv_result.data) == 0:
-                raise ValueError(f"Conversation {conversation_id} not found")
+                # En lugar de fallar, creamos una respuesta genérica de error
+                print(f"Conversación {conversation_id} no encontrada")
+                return "Lo siento, no puedo encontrar esta conversación. Por favor, intenta iniciar una nueva conversación."
             
             # If chatbot is not active, return empty response
             if not conv_result.data[0].get("chatbot_activo", True):
                 return ""
+            
+            try:    
+                # Get LLM configuration
+                llm_config = self._get_llm_config(empresa_id)
                 
-            # Get LLM configuration
-            llm_config = self._get_llm_config(empresa_id)
-            
-            # Create LLM
-            llm = ChatOpenAI(
-                model=llm_config["model"],
-                temperature=llm_config["temperature"],
-                openai_api_key=llm_config["api_key"],
-                max_tokens=llm_config["max_tokens"]
-            )
-            
-            # Get chatbot context (ahora incluye prompt_templates si existen)
-            context = self._get_chatbot_context(chatbot_id)
-            
-            # Create prompt template
-            prompt = ChatPromptTemplate.from_messages([
-                ("system", context["system_message"]),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{question}")
-            ])
-            
-            # Create chain
-            chain = prompt | llm | StrOutputParser()
-            
-            # Create message history
-            message_history = self._get_or_create_message_history(conversation_id)
-            
-            # Create runnable with message history
-            chain_with_history = RunnableWithMessageHistory(
-                chain,
-                lambda session_id: message_history,
-                input_messages_key="question",
-                history_messages_key="history"
-            )
-            
-            # Generate response
-            # Para solucionar el problema de formato, evitamos pasar variables especiales
-            # y nos aseguramos de que todas las cadenas estén correctamente formateadas
-            input_data = {
-                "history": message_history.messages,
-                "question": message
-            }
-            
-            # Tratamos de arreglar tanto el formato especial como el normal
-            if special_format:
-                # Con comillas como parte del nombre de la variable
-                input_data['"id"'] = str(chatbot_id)
-            else:
-                # Sin comillas en el nombre de la variable
-                input_data["id"] = str(chatbot_id)
-            
-            response = chain_with_history.invoke(input_data, config)
-            
-            return response
+                # Create LLM
+                llm = ChatOpenAI(
+                    model=llm_config["model"],
+                    temperature=llm_config["temperature"],
+                    openai_api_key=llm_config["api_key"],
+                    max_tokens=llm_config["max_tokens"]
+                )
+                
+                # Get chatbot context (ahora incluye prompt_templates si existen)
+                context = self._get_chatbot_context(chatbot_id)
+                
+                # Create prompt template
+                prompt = ChatPromptTemplate.from_messages([
+                    ("system", context["system_message"]),
+                    MessagesPlaceholder(variable_name="history"),
+                    ("human", "{question}")
+                ])
+                
+                # Create chain
+                chain = prompt | llm | StrOutputParser()
+                
+                # Create message history
+                message_history = self._get_or_create_message_history(conversation_id)
+                
+                # Create runnable with message history
+                chain_with_history = RunnableWithMessageHistory(
+                    chain,
+                    lambda session_id: message_history,
+                    input_messages_key="question",
+                    history_messages_key="history"
+                )
+                
+                # Generate response
+                # Para solucionar el problema de formato, evitamos pasar variables especiales
+                # y nos aseguramos de que todas las cadenas estén correctamente formateadas
+                input_data = {
+                    "history": message_history.messages,
+                    "question": message
+                }
+                
+                # Tratamos de arreglar tanto el formato especial como el normal
+                if special_format:
+                    # Con comillas como parte del nombre de la variable
+                    input_data['"id"'] = str(chatbot_id)
+                else:
+                    # Sin comillas en el nombre de la variable
+                    input_data["id"] = str(chatbot_id)
+                
+                response = chain_with_history.invoke(input_data, config)
+                
+                return response
+            except Exception as inner_e:
+                # Capturamos errores específicos de la generación de respuestas
+                print(f"Error específico en generate_response: {str(inner_e)}")
+                # Registramos el error detallado pero devolvemos un mensaje amigable
+                return "Lo siento, estoy teniendo problemas para generar una respuesta. Por favor, inténtalo de nuevo más tarde."
+                
         except Exception as e:
-            print(f"Error detallado en generate_response: {str(e)}")
-            # Podemos intentar una respuesta por defecto en caso de error
-            return "Lo siento, estoy teniendo problemas para generar una respuesta. Por favor, inténtalo de nuevo más tarde."
+            print(f"Error general en generate_response: {str(e)}")
+            # Devolvemos un mensaje de error amigable al usuario
+            return "Lo siento, estoy teniendo problemas para procesar tu mensaje. Por favor, inténtalo de nuevo más tarde."
     
     def save_message(self, conversation_id: UUID, message: str, is_user: bool = True) -> Dict[str, Any]:
         """
