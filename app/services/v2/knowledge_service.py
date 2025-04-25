@@ -4,10 +4,11 @@ import json
 from datetime import datetime
 
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.document_loaders import (
-    CSVLoader,
-    PyPDFLoader,
-    TextLoader,
+# Importar solo los loaders que realmente estamos usando
+from langchain_community.document_loaders.csv_loader import CSVLoader
+from langchain_community.document_loaders.pdf import PyPDFLoader
+from langchain_community.document_loaders.text import TextLoader
+from langchain_community.document_loaders.unstructured import (
     UnstructuredWordDocumentLoader,
     UnstructuredExcelLoader
 )
