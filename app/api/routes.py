@@ -91,20 +91,58 @@ async def process_audio_message(request: AudioMessageRequest = Body(...)):
         The response with transcription and chatbot reply
     """
     try:
-        logger.info(f"Procesando mensaje de audio para chatbot {request.chatbot_id}")
+        logger.info(f"Procesando mensaje de audio desde canal {request.canal_identificador}")
         
-        response = audio_service.process_audio_message(
-            canal_id=request.canal_id,
-            canal_identificador=request.canal_identificador,
-            empresa_id=request.empresa_id,
-            chatbot_id=request.chatbot_id,
-            audio_base64=request.audio_base64,
-            formato_audio=request.formato_audio,
-            idioma=request.idioma,
-            conversacion_id=request.conversacion_id,
-            lead_id=request.lead_id,
-            metadata=request.metadata
-        )
+        # Si se proporciona chatbot_contexto_id, usar process_audio_by_chatbot_contexto
+        if hasattr(request, 'chatbot_contexto_id') and request.chatbot_contexto_id:
+            from app.services.channel_service import channel_service
+            
+            # Obtener configuración del contexto
+            try:
+                config = channel_service.get_chatbot_contexto_config(request.chatbot_contexto_id)
+                canal_id = UUID(config["canal_id"])
+                chatbot_id = UUID(config["chatbot_id"])
+                empresa_id = UUID(config["empresa_id"])
+            except Exception as e:
+                logger.error(f"Error al obtener configuración del contexto: {str(e)}")
+                raise ValueError(f"Error al obtener configuración del contexto: {str(e)}")
+                
+            # Asegurarnos de que conversacion_id sea None y no "None" o undefined
+            conversacion_id = None
+            if hasattr(request, 'conversacion_id') and request.conversacion_id and request.conversacion_id != "None" and request.conversacion_id != "undefined":
+                conversacion_id = request.conversacion_id
+            
+            response = audio_service.process_audio_message(
+                canal_id=canal_id,
+                canal_identificador=request.canal_identificador,
+                empresa_id=empresa_id,
+                chatbot_id=chatbot_id,
+                audio_base64=request.audio_base64,
+                formato_audio=request.formato_audio,
+                idioma=request.idioma,
+                conversacion_id=conversacion_id,
+                lead_id=request.lead_id,
+                metadata=request.metadata
+            )
+        else:
+            # Método tradicional usando canal_id, empresa_id y chatbot_id
+            # Asegurarnos de que conversacion_id sea None y no "None" o undefined
+            conversacion_id = None
+            if hasattr(request, 'conversacion_id') and request.conversacion_id and request.conversacion_id != "None" and request.conversacion_id != "undefined":
+                conversacion_id = request.conversacion_id
+                
+            response = audio_service.process_audio_message(
+                canal_id=request.canal_id,
+                canal_identificador=request.canal_identificador,
+                empresa_id=request.empresa_id,
+                chatbot_id=request.chatbot_id,
+                audio_base64=request.audio_base64,
+                formato_audio=request.formato_audio,
+                idioma=request.idioma,
+                conversacion_id=conversacion_id,
+                lead_id=request.lead_id,
+                metadata=request.metadata
+            )
         
         logger.info(f"Audio procesado exitosamente para conversación {response['conversacion_id']}")
         

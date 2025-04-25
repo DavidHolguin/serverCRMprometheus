@@ -568,5 +568,87 @@ class ChannelService:
             logger.error(f"Error al procesar mensaje por chatbot_canal_id: {e}", exc_info=True)
             raise
 
+    def get_chatbot_contexto_config(self, chatbot_contexto_id: UUID) -> Dict[str, Any]:
+        """
+        Obtiene la configuración completa de un contexto de chatbot usando chatbot_contexto_id
+        
+        Args:
+            chatbot_contexto_id: ID del contexto del chatbot
+            
+        Returns:
+            Diccionario con la información completa de configuración
+        """
+        try:
+            # Verificar si el chatbot_contexto_id existe
+            context_check = supabase.table("chatbot_contextos").select("*").eq("id", str(chatbot_contexto_id)).limit(1).execute()
+            
+            if not context_check.data or len(context_check.data) == 0:
+                logger.warning(f"Contexto de chatbot con ID {chatbot_contexto_id} no encontrado")
+                raise ValueError(f"Contexto de chatbot con ID {chatbot_contexto_id} no encontrado")
+            
+            contexto = context_check.data[0]
+            chatbot_id = contexto.get("chatbot_id")
+            
+            # Obtener información del chatbot
+            chatbot_result = supabase.table("chatbots").select("*").eq("id", chatbot_id).limit(1).execute()
+            
+            if not chatbot_result.data or len(chatbot_result.data) == 0:
+                raise ValueError(f"Chatbot con ID {chatbot_id} no encontrado")
+                
+            chatbot = chatbot_result.data[0]
+            empresa_id = chatbot.get("empresa_id")
+            
+            # Encontrar un canal web activo para este chatbot
+            channel_result = supabase.table("chatbot_canales")\
+                .select("*, canales(*)")\
+                .eq("chatbot_id", chatbot_id)\
+                .eq("is_active", True)\
+                .execute()
+            
+            # Buscar primero un canal web
+            canal_id = None
+            canal_tipo = None
+            for channel in channel_result.data:
+                if channel.get("canales", {}).get("tipo") == "web":
+                    canal_id = channel.get("canal_id")
+                    canal_tipo = "web"
+                    break
+            
+            # Si no hay canal web, usar el primer canal disponible
+            if not canal_id and channel_result.data:
+                canal_id = channel_result.data[0].get("canal_id")
+                canal_tipo = channel_result.data[0].get("canales", {}).get("tipo")
+            
+            if not canal_id:
+                # Si no hay ningún canal configurado, intentar encontrar un canal web genérico
+                web_channel = supabase.table("canales").select("id").eq("tipo", "web").limit(1).execute()
+                if web_channel.data and len(web_channel.data) > 0:
+                    canal_id = web_channel.data[0]["id"]
+                    canal_tipo = "web"
+                else:
+                    raise ValueError(f"No se encontró ningún canal activo para el chatbot {chatbot_id}")
+            
+            # Retornar la configuración completa
+            return {
+                "chatbot_contexto_id": str(chatbot_contexto_id),
+                "chatbot_id": chatbot_id,
+                "empresa_id": empresa_id,
+                "canal_id": canal_id,
+                "canal_tipo": canal_tipo,
+                "nombre_chatbot": chatbot.get("nombre"),
+                "tipo_contexto": contexto.get("tipo", "web"),
+                "welcome_message": contexto.get("welcome_message"),
+                "personality": contexto.get("personality"),
+                "general_context": contexto.get("general_context"),
+                "communication_tone": contexto.get("communication_tone"),
+                "main_purpose": contexto.get("main_purpose"),
+                "key_points": contexto.get("key_points"),
+                "special_instructions": contexto.get("special_instructions")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error obteniendo configuración de chatbot-contexto: {e}", exc_info=True)
+            raise
+
 # Create singleton instance
 channel_service = ChannelService()

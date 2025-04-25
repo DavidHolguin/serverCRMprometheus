@@ -7,10 +7,11 @@ class AudioMessageRequest(BaseModel):
     """Modelo para solicitudes de mensajes de audio"""
     conversacion_id: Optional[UUID] = Field(None, description="ID de la conversación existente")
     lead_id: Optional[UUID] = Field(None, description="ID del lead (opcional si se proporciona conversacion_id)")
-    empresa_id: UUID = Field(..., description="ID de la empresa")
-    chatbot_id: UUID = Field(..., description="ID del chatbot")
+    empresa_id: Optional[UUID] = Field(None, description="ID de la empresa (opcional si se proporciona chatbot_contexto_id)")
+    chatbot_id: Optional[UUID] = Field(None, description="ID del chatbot (opcional si se proporciona chatbot_contexto_id)")
     canal_id: Optional[UUID] = Field(None, description="ID del canal (se obtendrá automáticamente si no se proporciona)")
     canal_identificador: Optional[str] = Field(None, description="Identificador único del canal (ej. session_id, phone_number, etc.)")
+    chatbot_contexto_id: Optional[UUID] = Field(None, description="ID del contexto del chatbot para el canal (nuevo método)")
     audio_base64: str = Field(..., description="Contenido del audio codificado en base64")
     formato_audio: str = Field(..., description="Formato del archivo de audio (mp3, wav, m4a, etc.)")
     idioma: Optional[str] = Field("es", description="Código de idioma para la transcripción (es, en, etc.)")
