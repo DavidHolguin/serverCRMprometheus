@@ -22,6 +22,7 @@ from app.services.conversation_service import conversation_service
 from app.services.audio_service import audio_service
 from app.models.examples import EXAMPLES
 from app.api.endpoints.evaluations import router as evaluations_router
+from app.api.v2.router import v2_router
 from app.core.config import settings
 from app.db.supabase_client import supabase
 
@@ -34,6 +35,9 @@ api_router.include_router(
     prefix="/evaluations",
     tags=["evaluations"]
 )
+
+# Incluir router v2
+api_router.include_router(v2_router)
 
 @api_router.post("/message", response_model=ChannelMessageResponse)
 async def process_message(request: ChannelMessageRequest):
