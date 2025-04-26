@@ -13,22 +13,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copiar requirements primero para mejor caché
 COPY requirements.txt .
 
-# Actualizar pip e instalar dependencias una por una
+# Instalar todas las dependencias de una vez utilizando el archivo requirements.txt
+# Esto es más eficiente y garantiza compatibilidad entre paquetes
 RUN pip install --upgrade pip && \
-    pip install fastapi==0.104.1 && \
-    pip install uvicorn==0.23.2 && \
-    pip install pydantic==2.4.2 && \
-    pip install python-dotenv==1.0.0 && \
-    pip install httpx==0.25.1 && \
-    pip install python-multipart==0.0.6 && \
-    pip install supabase==1.0.4 && \
-    pip install openai==0.28.1 && \
-    pip install langchain==0.0.267 && \
-    pip install langchain-community==0.0.13 && \
-    pip install langchain-openai==0.0.2 && \
-    pip install pydub==0.25.1 && \
-    pip install numpy==1.26.0 && \
-    pip install unidecode==1.3.7
+    pip install --no-cache-dir -r requirements.txt
+
+# Instalar dependencias adicionales para procesar Excel y páginas web
+RUN pip install --no-cache-dir pandas openpyxl requests beautifulsoup4 PyPDF2==2.12.1
 
 # Copiar el resto de la aplicación
 COPY . .
