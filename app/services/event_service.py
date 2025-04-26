@@ -4,9 +4,13 @@ from datetime import datetime
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from threading import Thread
+import logging
 
 from app.db.supabase_client import supabase
 from app.core.config import settings
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 class EventService:
     """Servicio para registrar eventos en el sistema de análisis"""
@@ -48,6 +52,8 @@ class EventService:
     EVENT_QUICK_RESPONSE = "respuesta_rapida"
     EVENT_RESPONSE_TIME = "tiempo_respuesta"
     EVENT_RATING_RECEIVED = "calificacion_recibida"
+    EVENT_AGENT_KNOWLEDGE_ERROR = "agent_knowledge_error"
+    EVENT_AGENT_KNOWLEDGE_ADDED = "agent_knowledge_added"
     
     # Eventos de Sistema
     EVENT_AUTOMATION_EXECUTED = "automatizacion_ejecutada"
@@ -58,9 +64,18 @@ class EventService:
     # Cache de los tipos de eventos para evitar múltiples consultas
     _event_type_cache = {}
     
+    # Mapeo de eventos a categorías para facilitar la inferencia
+    _event_category_map = {
+        "agent_knowledge_error": "agente",
+        "agent_knowledge_added": "agente",
+        # Agregar más mapeos según sea necesario
+    }
+    
     def __init__(self):
         """Inicializa el servicio de eventos y carga el caché de tipos de eventos"""
         self._load_event_types()
+        # Asegurarse de que los eventos críticos existen en la base de datos
+        self._ensure_critical_events()
     
     def _load_event_types(self):
         """Carga los tipos de eventos desde la base de datos en el caché"""
@@ -74,8 +89,67 @@ class EventService:
                         "id": event_type["tipo_evento_id"],
                         "categoria": event_type["categoria"]
                     }
+                logger.info(f"Cargados {len(result.data)} tipos de eventos en el caché")
+            else:
+                logger.warning("No se encontraron tipos de eventos en la tabla dim_tipos_eventos")
         except Exception as e:
-            print(f"Error al cargar tipos de eventos: {e}")
+            logger.error(f"Error al cargar tipos de eventos: {e}")
+    
+    def _ensure_critical_events(self):
+        """Asegura que los eventos críticos estén registrados en la base de datos"""
+        # Lista de eventos críticos que deben existir
+        critical_events = [
+            {"nombre": "agent_knowledge_error", "categoria": "agente", 
+             "descripcion": "Error en la carga de conocimiento para agente", 
+             "impacto_score": 3, "requiere_seguimiento": True, "grupo_analisis": "system_health"},
+            
+            {"nombre": "agent_knowledge_added", "categoria": "agente", 
+             "descripcion": "Conocimiento añadido al agente", 
+             "impacto_score": 2, "requiere_seguimiento": False, "grupo_analisis": "agent_activity"}
+        ]
+        
+        try:
+            for event in critical_events:
+                # Si el evento no está en el caché, intenta crearlo
+                if event["nombre"] not in self._event_type_cache:
+                    logger.info(f"Evento crítico '{event['nombre']}' no encontrado en caché. Creando...")
+                    
+                    # Verificar si ya existe en la base de datos (doble verificación)
+                    check_result = supabase.table("dim_tipos_eventos").select("tipo_evento_id").eq("nombre", event["nombre"]).limit(1).execute()
+                    
+                    if check_result.data and len(check_result.data) > 0:
+                        # El evento ya existe, solo actualizar caché
+                        self._event_type_cache[event["nombre"]] = {
+                            "id": check_result.data[0]["tipo_evento_id"],
+                            "categoria": event["categoria"]
+                        }
+                        logger.info(f"Evento '{event['nombre']}' encontrado en BD pero no en caché. Caché actualizada.")
+                    else:
+                        # Crear el evento en la base de datos
+                        new_event = {
+                            "tipo_evento_id": str(UUID()),  # Generar UUID
+                            "nombre": event["nombre"],
+                            "categoria": event["categoria"],
+                            "descripcion": event["descripcion"],
+                            "impacto_score": event["impacto_score"],
+                            "requiere_seguimiento": event["requiere_seguimiento"],
+                            "grupo_analisis": event["grupo_analisis"],
+                            "is_active": True
+                        }
+                        
+                        result = supabase.table("dim_tipos_eventos").insert(new_event).execute()
+                        
+                        if result.data and len(result.data) > 0:
+                            # Actualizar el caché con el nuevo evento
+                            self._event_type_cache[event["nombre"]] = {
+                                "id": result.data[0]["tipo_evento_id"],
+                                "categoria": event["categoria"]
+                            }
+                            logger.info(f"Evento crítico '{event['nombre']}' creado correctamente")
+                        else:
+                            logger.error(f"Error al crear evento crítico '{event['nombre']}'")
+        except Exception as e:
+            logger.error(f"Error al asegurar eventos críticos: {e}")
     
     def log_event(self, 
                  empresa_id: UUID,
@@ -125,13 +199,20 @@ class EventService:
             Datos del evento registrado o None si es procesado de forma asíncrona
         """
         try:
-            # Si el tipo de evento no está en caché, intentamos recargarlo
+            # Si el tipo de evento no está en caché, intentamos crearlo para eventos específicos
             if event_type not in self._event_type_cache:
+                logger.warning(f"Tipo de evento '{event_type}' no encontrado en caché")
+                
+                # Para eventos conocidos que deberían existir, tratamos de crearlos
+                if event_type in self._event_category_map:
+                    self._create_missing_event(event_type)
+                
+                # Recargamos el caché por si se ha creado el evento
                 self._load_event_types()
                 
-                # Si sigue sin estar, registramos el error y continuamos con el flujo principal
+                # Si sigue sin estar en el caché después de intentar crearlo, usar evento genérico
                 if event_type not in self._event_type_cache:
-                    print(f"Advertencia: Tipo de evento '{event_type}' no encontrado en dim_tipos_eventos")
+                    logger.warning(f"Advertencia: Tipo de evento '{event_type}' no encontrado en dim_tipos_eventos")
             
             # Preparar datos del evento
             event_data = self._prepare_event_data(
@@ -163,9 +244,58 @@ class EventService:
                 return self._process_event(event_data)
                 
         except Exception as e:
-            print(f"Error al registrar evento {event_type}: {e}")
+            logger.error(f"Error al registrar evento {event_type}: {e}")
             # Log error pero no propagar excepción para no afectar flujo principal
             return {"status": "error", "error": str(e), "event_type": event_type}
+    
+    def _create_missing_event(self, event_type: str):
+        """Crea un evento faltante para tipos conocidos"""
+        try:
+            if event_type in self._event_category_map:
+                categoria = self._event_category_map[event_type]
+                
+                # Definir datos según el tipo de evento
+                if event_type == "agent_knowledge_error":
+                    descripcion = "Error en la carga de conocimiento para agente"
+                    impacto_score = 3
+                    requiere_seguimiento = True
+                    grupo_analisis = "system_health"
+                elif event_type == "agent_knowledge_added":
+                    descripcion = "Conocimiento añadido al agente"
+                    impacto_score = 2
+                    requiere_seguimiento = False
+                    grupo_analisis = "agent_activity"
+                else:
+                    descripcion = f"Evento de {categoria}"
+                    impacto_score = 2
+                    requiere_seguimiento = False
+                    grupo_analisis = f"{categoria}_activity"
+                
+                # Crear el evento en la base de datos
+                new_event = {
+                    "nombre": event_type,
+                    "categoria": categoria,
+                    "descripcion": descripcion,
+                    "impacto_score": impacto_score,
+                    "requiere_seguimiento": requiere_seguimiento,
+                    "grupo_analisis": grupo_analisis,
+                    "is_active": True
+                }
+                
+                logger.info(f"Intentando crear tipo de evento: {event_type}")
+                result = supabase.table("dim_tipos_eventos").insert(new_event).execute()
+                
+                if result.data and len(result.data) > 0:
+                    # Actualizar el caché con el nuevo evento
+                    self._event_type_cache[event_type] = {
+                        "id": result.data[0]["tipo_evento_id"],
+                        "categoria": categoria
+                    }
+                    logger.info(f"Evento '{event_type}' creado correctamente")
+                else:
+                    logger.error(f"Error al crear evento '{event_type}'")
+        except Exception as e:
+            logger.error(f"Error al crear evento faltante '{event_type}': {e}")
     
     def _prepare_event_data(self, **kwargs) -> Dict[str, Any]:
         """Prepara los datos del evento para su registro"""
@@ -180,7 +310,7 @@ class EventService:
             for name, info in self._event_type_cache.items():
                 if info["categoria"] == categoria:
                     tipo_evento_info = info
-                    print(f"Usando evento genérico '{name}' para '{event_type}'")
+                    logger.info(f"Usando evento genérico '{name}' para '{event_type}'")
                     break
         
         # Si aún así no tenemos un tipo de evento, usamos un UUID genérico (no debería ocurrir en producción)
@@ -290,7 +420,7 @@ class EventService:
             raise ValueError("No se pudo registrar el evento")
             
         except Exception as e:
-            print(f"Error al procesar evento: {e}")
+            logger.error(f"Error al procesar evento: {e}")
             # En producción, deberíamos registrar estos errores para reintento
             raise
     
@@ -300,7 +430,7 @@ class EventService:
             # Enviar tarea al ejecutor de hilos
             self._executor.submit(self._process_event, event_data)
         except Exception as e:
-            print(f"Error al enviar evento para procesamiento asíncrono: {e}")
+            logger.error(f"Error al enviar evento para procesamiento asíncrono: {e}")
     
     def _get_entidad_id(self, entidad_tipo: Optional[str], entidad_id: Optional[str]) -> Optional[str]:
         """
@@ -335,7 +465,7 @@ class EventService:
             return "00000000-0000-0000-0000-000000000000"
                 
         except Exception as e:
-            print(f"Error al obtener/crear entidad en dim_entidades: {e}")
+            logger.error(f"Error al obtener/crear entidad en dim_entidades: {e}")
             # En caso de error, devolver un ID por defecto para evitar errores de restricción not-null
             return "00000000-0000-0000-0000-000000000000"
     

@@ -2,67 +2,128 @@ from typing import Dict, List, Any, Optional
 from uuid import UUID
 import json
 from datetime import datetime
+import logging
+import sys
+import importlib.util
 
 from langchain_openai import OpenAIEmbeddings
-# Importamos cada loader directamente desde el archivo base
-# para evitar la carga del módulo language_parser problemático
+
+# Configurar logger
+logger = logging.getLogger(__name__)
+
+# Verificar y cargar PyPDF2 explícitamente
 try:
-    # Intentar importaciones directas para evitar problemas con módulos intermedios
-    import PyPDF2  # Dependencia directa para PyPDFLoader
-    from langchain.document_loaders.csv_loader import CSVLoader
-    from langchain.document_loaders.text import TextLoader
-    # Si hay importaciones más específicas disponibles:
-    from langchain.document_loaders.unstructured import UnstructuredFileLoader
-    # Creamos clases simples para los loaders si es necesario
+    if importlib.util.find_spec("PyPDF2") is None:
+        logger.error("PyPDF2 no está instalado. Intentando instalarlo...")
+        import subprocess
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "PyPDF2"])
+        logger.info("PyPDF2 instalado correctamente.")
+    
+    import PyPDF2
+    logger.info(f"PyPDF2 importado correctamente. Versión: {PyPDF2.__version__}")
+    
+    # Importamos cada loader directamente desde el archivo base
+    # para evitar la carga del módulo language_parser problemático
+    try:
+        # Intentar importaciones directas para evitar problemas con módulos intermedios
+        from langchain.document_loaders.csv_loader import CSVLoader
+        from langchain.document_loaders.text import TextLoader
+        # Si hay importaciones más específicas disponibles:
+        from langchain.document_loaders.unstructured import UnstructuredFileLoader
+        # Creamos clases simples para los loaders si es necesario
+        class PyPDFLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                from langchain.docstore.document import Document
+                # Lógica básica para cargar un PDF
+                pdf = PyPDF2.PdfReader(self.file_path)
+                return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
+                        for i, page in enumerate(pdf.pages)]
+        
+        class UnstructuredWordDocumentLoader(UnstructuredFileLoader):
+            """Loader para documentos de Word usando Unstructured"""
+            pass
+        
+        class UnstructuredExcelLoader(UnstructuredFileLoader):
+            """Loader para archivos Excel usando Unstructured"""
+            pass
+            
+    except ImportError as e:
+        # Fallback - utilizar implementaciones más simples si las importaciones fallan
+        logger.error(f"Error en importaciones de loaders: {e}")
+        # Implementaciones mínimas que pueden funcionar para casos básicos
+        from langchain.docstore.document import Document
+        
+        class CSVLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                import csv
+                docs = []
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    csv_reader = csv.reader(f)
+                    headers = next(csv_reader)
+                    for row in csv_reader:
+                        content = " ".join(row)
+                        docs.append(Document(page_content=content, metadata={"source": self.file_path}))
+                return docs
+        
+        class PyPDFLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                pdf = PyPDF2.PdfReader(self.file_path)
+                return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
+                        for i, page in enumerate(pdf.pages)]
+        
+        class TextLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                return [Document(page_content=text, metadata={"source": self.file_path})]
+        
+        class UnstructuredWordDocumentLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                # Implementación básica para documentos Word
+                return [Document(page_content="[Contenido del documento Word]", metadata={"source": self.file_path})]
+        
+        class UnstructuredExcelLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                # Implementación básica para Excel
+                return [Document(page_content="[Contenido del archivo Excel]", metadata={"source": self.file_path})]
+
+except ImportError as e:
+    logger.error(f"Error crítico al importar PyPDF2: {e}")
+    # Si PyPDF2 no está disponible, definimos versiones muy básicas de nuestras clases
+    # que al menos no causarán errores al inicializar el servicio
+    from langchain.docstore.document import Document
+    
     class PyPDFLoader:
         def __init__(self, file_path):
             self.file_path = file_path
         
         def load(self):
-            from langchain.docstore.document import Document
-            # Lógica básica para cargar un PDF
-            pdf = PyPDF2.PdfReader(self.file_path)
-            return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
-                    for i, page in enumerate(pdf.pages)]
-    
-    class UnstructuredWordDocumentLoader(UnstructuredFileLoader):
-        """Loader para documentos de Word usando Unstructured"""
-        pass
-    
-    class UnstructuredExcelLoader(UnstructuredFileLoader):
-        """Loader para archivos Excel usando Unstructured"""
-        pass
-        
-except ImportError as e:
-    # Fallback - utilizar implementaciones más simples si las importaciones fallan
-    print(f"Error en importaciones: {e}")
-    # Implementaciones mínimas que pueden funcionar para casos básicos
-    from langchain.docstore.document import Document
+            raise ImportError("PyPDF2 no está instalado. No se puede procesar archivos PDF.")
     
     class CSVLoader:
         def __init__(self, file_path):
             self.file_path = file_path
         
         def load(self):
-            import csv
-            docs = []
-            with open(self.file_path, 'r', encoding='utf-8') as f:
-                csv_reader = csv.reader(f)
-                headers = next(csv_reader)
-                for row in csv_reader:
-                    content = " ".join(row)
-                    docs.append(Document(page_content=content, metadata={"source": self.file_path}))
-            return docs
-    
-    class PyPDFLoader:
-        def __init__(self, file_path):
-            self.file_path = file_path
-        
-        def load(self):
-            import PyPDF2
-            pdf = PyPDF2.PdfReader(self.file_path)
-            return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
-                    for i, page in enumerate(pdf.pages)]
+            raise ImportError("Error al cargar las dependencias necesarias.")
     
     class TextLoader:
         def __init__(self, file_path):
@@ -78,16 +139,14 @@ except ImportError as e:
             self.file_path = file_path
         
         def load(self):
-            # Implementación básica para documentos Word
-            return [Document(page_content="[Contenido del documento Word]", metadata={"source": self.file_path})]
+            raise ImportError("No se pueden cargar documentos Word sin las dependencias necesarias.")
     
     class UnstructuredExcelLoader:
         def __init__(self, file_path):
             self.file_path = file_path
         
         def load(self):
-            # Implementación básica para Excel
-            return [Document(page_content="[Contenido del archivo Excel]", metadata={"source": self.file_path})]
+            raise ImportError("No se pueden cargar archivos Excel sin las dependencias necesarias.")
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from supabase.client import Client as SupabaseClient
@@ -110,6 +169,13 @@ class KnowledgeService:
             chunk_size=1000,
             chunk_overlap=200
         )
+        # Verificar la disponibilidad de las dependencias al inicio
+        logger.info("Verificando dependencias del servicio de conocimiento...")
+        try:
+            import PyPDF2
+            logger.info(f"PyPDF2 disponible: versión {PyPDF2.__version__}")
+        except ImportError:
+            logger.error("PyPDF2 no está disponible. La carga de PDFs no funcionará.")
 
     async def process_document(
         self,
