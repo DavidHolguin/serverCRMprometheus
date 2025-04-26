@@ -7,6 +7,9 @@ import sys
 import importlib.util
 import traceback
 
+# Importación necesaria para la serialización de datetime
+from datetime import datetime, timezone
+
 from langchain_openai import OpenAIEmbeddings
 
 # Configurar logger
@@ -205,6 +208,13 @@ class KnowledgeService:
         except ImportError:
             logger.error("PyPDF2 no está disponible. La carga de PDFs no funcionará.")
 
+    # Método auxiliar para convertir datetime a un formato serializable
+    def _serialize_datetime(self, obj):
+        """Convierte objetos datetime a strings ISO"""
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        raise TypeError(f"Type {type(obj)} not serializable")
+        
     async def process_document(
         self,
         file_path: str,
@@ -273,6 +283,9 @@ class KnowledgeService:
                     knowledge_id = uuid4()
                     logger.debug(f"Creando conocimiento con ID: {knowledge_id}")
                     
+                    # Fechas en formato ISO para serialización
+                    current_time = datetime.now().isoformat()
+                    
                     knowledge = AgentKnowledge(
                         id=knowledge_id,  # Usar el UUID generado
                         agent_id=agent_id,
@@ -299,6 +312,10 @@ class KnowledgeService:
                     # Asegurarnos que el ID esté como string en el diccionario
                     knowledge_dict['id'] = str(knowledge_id)
                     knowledge_dict['agent_id'] = str(agent_id)
+                    
+                    # Convertir fechas a strings ISO
+                    knowledge_dict['created_at'] = knowledge_dict['created_at'].isoformat()
+                    knowledge_dict['updated_at'] = knowledge_dict['updated_at'].isoformat()
                     
                     # Guardar en la base de datos
                     result = supabase.table("agente_conocimiento").insert(knowledge_dict).execute()
