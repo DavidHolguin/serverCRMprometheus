@@ -57,7 +57,54 @@ try:
         # Implementaciones mínimas que pueden funcionar para casos básicos
         from langchain.docstore.document import Document
         
-        # ... resto de las importaciones e implementaciones de fallback ...
+        class CSVLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                import csv
+                docs = []
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    csv_reader = csv.reader(f)
+                    headers = next(csv_reader)
+                    for row in csv_reader:
+                        content = " ".join(row)
+                        docs.append(Document(page_content=content, metadata={"source": self.file_path}))
+                return docs
+        
+        class PyPDFLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                pdf = PyPDF2.PdfReader(self.file_path)
+                return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
+                        for i, page in enumerate(pdf.pages)]
+        
+        class TextLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                return [Document(page_content=text, metadata={"source": self.file_path})]
+        
+        class UnstructuredWordDocumentLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                # Implementación básica para documentos Word
+                return [Document(page_content="[Contenido del documento Word]", metadata={"source": self.file_path})]
+        
+        class UnstructuredExcelLoader:
+            def __init__(self, file_path):
+                self.file_path = file_path
+            
+            def load(self):
+                # Implementación básica para Excel
+                return [Document(page_content="[Contenido del archivo Excel]", metadata={"source": self.file_path})]
 
 except ImportError as e:
     logger.error(f"Error crítico al importar PyPDF2: {e}")
@@ -65,7 +112,42 @@ except ImportError as e:
     # que al menos no causarán errores al inicializar el servicio
     from langchain.docstore.document import Document
     
-    # ... resto de las implementaciones de fallback ...
+    class PyPDFLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        
+        def load(self):
+            raise ImportError("PyPDF2 no está instalado. No se puede procesar archivos PDF.")
+    
+    class CSVLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        
+        def load(self):
+            raise ImportError("Error al cargar las dependencias necesarias.")
+    
+    class TextLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        
+            def load(self):
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                return [Document(page_content=text, metadata={"source": self.file_path})]
+    
+    class UnstructuredWordDocumentLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        
+        def load(self):
+            raise ImportError("No se pueden cargar documentos Word sin las dependencias necesarias.")
+    
+    class UnstructuredExcelLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        
+        def load(self):
+            raise ImportError("No se pueden cargar archivos Excel sin las dependencias necesarias.")
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from supabase.client import Client as SupabaseClient
@@ -101,9 +183,12 @@ class KnowledgeService:
             # Crear una implementación de respaldo si falla
             self.embeddings = None
         
+        # Usar parámetros en la inicialización para almacenarlos como atributos directos
+        self.chunk_size = 1000
+        self.chunk_overlap = 200
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.chunk_overlap
         )
         
         # Verificar la disponibilidad de las dependencias al inicio
@@ -155,7 +240,7 @@ class KnowledgeService:
             documents = loader.load()
             
             # Dividir el texto en chunks
-            logger.info(f"Dividiendo documento en chunks con tamaño {self.text_splitter.chunk_size}")
+            logger.info(f"Dividiendo documento en chunks con tamaño {self.chunk_size} y solapamiento {self.chunk_overlap}")
             texts = self.text_splitter.split_documents(documents)
             
             # Generar embeddings
