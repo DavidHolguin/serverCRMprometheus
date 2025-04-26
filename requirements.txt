@@ -2,10 +2,12 @@ fastapi==0.104.1
 uvicorn==0.23.2
 pydantic==2.4.2
 python-dotenv==1.0.0
-langchain>=0.1.0
-langchain-community>=0.0.15
-langchain-openai==0.0.2
-openai==0.28.1
+# Usar una versión específica de langchain compatible con las demás dependencias
+langchain==0.0.267
+# Reemplazar langchain-community y langchain-openai con versiones compatibles
+langchain-community==0.0.13
+# No fijar la versión de OpenAI para permitir que pip resuelva el conflicto
+openai>=0.28.1,<1.0.0
 supabase==1.0.4
 python-multipart==0.0.6
 httpx==0.25.1
