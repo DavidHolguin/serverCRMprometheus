@@ -6,6 +6,7 @@ import logging
 import sys
 import importlib.util
 import traceback
+import re
 
 # Importación necesaria para la serialización de datetime
 from datetime import datetime, timezone
@@ -215,6 +216,39 @@ class KnowledgeService:
             return obj.isoformat()
         raise TypeError(f"Type {type(obj)} not serializable")
         
+    def _clean_text(self, text: str) -> str:
+        """
+        Limpia el texto eliminando espacios en blanco y saltos de línea innecesarios
+        
+        Args:
+            text: Texto a limpiar
+            
+        Returns:
+            Texto limpio
+        """
+        if not text:
+            return ""
+            
+        # Reemplazar múltiples espacios en blanco por uno solo
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Reemplazar múltiples saltos de línea por uno solo
+        text = re.sub(r'\n+', '\n', text)
+        
+        # Eliminar espacios en blanco al inicio y fin de cada línea
+        lines = [line.strip() for line in text.split('\n')]
+        
+        # Volver a unir las líneas
+        text = '\n'.join(lines)
+        
+        # Eliminar líneas vacías consecutivas
+        text = re.sub(r'\n\s*\n', '\n', text)
+        
+        # Eliminar espacios en blanco al inicio y fin del texto
+        text = text.strip()
+        
+        return text
+        
     async def process_document(
         self,
         file_path: str,
@@ -247,6 +281,12 @@ class KnowledgeService:
             # Cargar el documento
             logger.info(f"Cargando documento {file_path} con loader para tipo {file_type}")
             documents = loader.load()
+            
+            # Limpiar el contenido de cada documento antes de dividirlo
+            for i, doc in enumerate(documents):
+                clean_content = self._clean_text(doc.page_content)
+                documents[i].page_content = clean_content
+                logger.debug(f"Documento {i} limpiado. Tamaño original: {len(doc.page_content)}, tamaño limpio: {len(clean_content)}")
             
             # Dividir el texto en chunks
             logger.info(f"Dividiendo documento en chunks con tamaño {self.chunk_size} y solapamiento {self.chunk_overlap}")
@@ -283,6 +323,9 @@ class KnowledgeService:
                     knowledge_id = uuid4()
                     logger.debug(f"Creando conocimiento con ID: {knowledge_id}")
                     
+                    # Limpiar el contenido una vez más antes de guardar
+                    content = self._clean_text(text.page_content)
+                    
                     # Fechas en formato ISO para serialización
                     current_time = datetime.now().isoformat()
                     
@@ -293,7 +336,7 @@ class KnowledgeService:
                         type="processed_document",
                         source=file_path,
                         format="text_with_embeddings",
-                        content=text.page_content,
+                        content=content,  # Usar el contenido limpio
                         embeddings=embedding,
                         metadata={
                             **(metadata or {}),
@@ -341,7 +384,7 @@ class KnowledgeService:
                         del knowledge_dict['format']
                         
                     # Asegurar que usamos 'contenido' en lugar de 'content'
-                    knowledge_dict['contenido'] = knowledge_dict.get('content', text.page_content)
+                    knowledge_dict['contenido'] = knowledge_dict.get('content', content)  # Usar el contenido limpio
                     if 'content' in knowledge_dict:
                         del knowledge_dict['content']
                         
@@ -426,74 +469,215 @@ class KnowledgeService:
         Returns:
             Loader apropiado para el tipo de archivo
         """
-        loaders = {
-            "pdf": PyPDFLoader,
-            "csv": CSVLoader,
-            "txt": TextLoader,
-            "docx": UnstructuredWordDocumentLoader,
-            "xlsx": UnstructuredExcelLoader
-        }
-        
-        loader_class = loaders.get(file_type.lower())
-        if not loader_class:
-            raise ValueError(f"Tipo de archivo no soportado: {file_type}")
+        try:
+            loaders = {
+                "pdf": PyPDFLoader,
+                "csv": CSVLoader,
+                "txt": TextLoader,
+                "docx": UnstructuredWordDocumentLoader,
+                "xlsx": self._get_excel_loader,
+                "xls": self._get_excel_loader,
+                "url": self._get_url_loader,
+                "html": self._get_html_loader
+            }
             
-        return loader_class(file_path)
-
-    async def search_similar_knowledge(
-        self,
-        query: str,
-        agent_id: UUID,
-        limit: int = 5
-    ) -> List[AgentKnowledge]:
+            loader_func_or_class = loaders.get(file_type.lower())
+            if not loader_func_or_class:
+                raise ValueError(f"Tipo de archivo no soportado: {file_type}")
+                
+            if callable(loader_func_or_class) and not isinstance(loader_func_or_class, type):
+                # Es una función que devuelve un loader, no una clase
+                return loader_func_or_class(file_path)
+            else:
+                # Es una clase de loader
+                return loader_func_or_class(file_path)
+        except Exception as e:
+            logger.error(f"Error al obtener loader para {file_type}: {e}")
+            raise
+    
+    def _get_excel_loader(self, file_path):
         """
-        Busca conocimiento similar usando embeddings
+        Obtiene un loader específico para archivos Excel
         
         Args:
-            query: Texto a buscar
-            agent_id: ID del agente
-            limit: Número máximo de resultados
+            file_path: Ruta al archivo Excel
             
         Returns:
-            Lista de conocimientos similares
+            Loader para archivos Excel
         """
         try:
-            # Generar embedding para la consulta
-            query_embedding = await self.embeddings.aembed_query(query)
-            
-            # Realizar búsqueda por similitud usando la función match_vectors
-            result = supabase.rpc(
-                'match_knowledge_vectors',
-                {
-                    'query_embedding': query_embedding,
-                    'match_threshold': 0.7,
-                    'match_count': limit,
-                    'agent_id': str(agent_id)
-                }
-            ).execute()
-            
-            # Convertir resultados a objetos AgentKnowledge
-            knowledge_entries = []
-            for item in result.data:
-                knowledge = AgentKnowledge(
-                    id=item['id'],
-                    agent_id=agent_id,
-                    type=item['type'],
-                    source=item['source'],
-                    format=item['format'],
-                    content=item['content'],
-                    metadata=item['metadata'],
-                    priority=item['priority'],
-                    created_at=item['created_at'],
-                    updated_at=item['updated_at']
-                )
-                knowledge_entries.append(knowledge)
+            # Intentar primero con un loader especializado de pandas
+            try:
+                import pandas as pd
+                from langchain.docstore.document import Document
                 
-            return knowledge_entries
-            
+                # Definir un loader personalizado basado en pandas
+                class PandasExcelLoader:
+                    def __init__(self, file_path):
+                        self.file_path = file_path
+                    
+                    def load(self):
+                        # Leer todas las hojas del archivo Excel
+                        sheets_dict = pd.read_excel(self.file_path, sheet_name=None)
+                        documents = []
+                        
+                        # Procesar cada hoja como un documento separado
+                        for sheet_name, df in sheets_dict.items():
+                            # Convertir el dataframe a string
+                            content = df.to_string(index=False)
+                            # Crear un documento para cada hoja
+                            doc = Document(
+                                page_content=content,
+                                metadata={"source": self.file_path, "sheet": sheet_name}
+                            )
+                            documents.append(doc)
+                        
+                        return documents
+                
+                return PandasExcelLoader(file_path)
+            except ImportError:
+                # Si pandas no está disponible, usar UnstructuredExcelLoader
+                return UnstructuredExcelLoader(file_path)
         except Exception as e:
-            print(f"Error en búsqueda de conocimiento: {e}")
-            return []
+            logger.error(f"Error al crear loader para Excel: {e}")
+            # Utilizar un loader simple como fallback
+            from langchain.docstore.document import Document
+            
+            class SimpleExcelLoader:
+                def __init__(self, file_path):
+                    self.file_path = file_path
+                
+                def load(self):
+                    return [Document(
+                        page_content=f"[Contenido del archivo Excel: {self.file_path}]",
+                        metadata={"source": self.file_path}
+                    )]
+            
+            return SimpleExcelLoader(file_path)
+    
+    def _get_url_loader(self, url):
+        """
+        Obtiene un loader para URLs
+        
+        Args:
+            url: URL a cargar
+            
+        Returns:
+            Loader para URLs
+        """
+        try:
+            # Intentar importar el loader de URLs
+            try:
+                from langchain.document_loaders import WebBaseLoader
+                return WebBaseLoader(url)
+            except ImportError:
+                # Si no está disponible, crear un loader simple
+                import requests
+                from bs4 import BeautifulSoup
+                from langchain.docstore.document import Document
+                
+                class SimpleWebLoader:
+                    def __init__(self, url):
+                        self.url = url
+                    
+                    def load(self):
+                        try:
+                            response = requests.get(self.url)
+                            response.raise_for_status()
+                            soup = BeautifulSoup(response.content, 'html.parser')
+                            
+                            # Eliminar scripts, estilos y contenido oculto
+                            for script in soup(["script", "style", "meta", "link"]):
+                                script.extract()
+                            
+                            # Extraer el texto
+                            text = soup.get_text(separator=' ')
+                            
+                            # Limpiar el texto
+                            lines = (line.strip() for line in text.splitlines())
+                            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                            text = ' '.join(chunk for chunk in chunks if chunk)
+                            
+                            return [Document(page_content=text, metadata={"source": self.url})]
+                        except Exception as e:
+                            logger.error(f"Error al cargar URL {self.url}: {e}")
+                            return [Document(page_content=f"Error al cargar URL: {str(e)}", metadata={"source": self.url})]
+                
+                return SimpleWebLoader(url)
+        except Exception as e:
+            logger.error(f"Error al crear loader para URL: {e}")
+            # Utilizar un loader muy simple como fallback
+            from langchain.docstore.document import Document
+            
+            class VerySimpleWebLoader:
+                def __init__(self, url):
+                    self.url = url
+                
+                def load(self):
+                    return [Document(
+                        page_content=f"[Contenido de la URL: {self.url}]",
+                        metadata={"source": self.url}
+                    )]
+            
+            return VerySimpleWebLoader(url)
+    
+    def _get_html_loader(self, file_path):
+        """
+        Obtiene un loader para archivos HTML
+        
+        Args:
+            file_path: Ruta al archivo HTML
+            
+        Returns:
+            Loader para archivos HTML
+        """
+        try:
+            # Intentar importar el loader de HTML
+            from bs4 import BeautifulSoup
+            from langchain.docstore.document import Document
+            
+            class SimpleHTMLLoader:
+                def __init__(self, file_path):
+                    self.file_path = file_path
+                
+                def load(self):
+                    try:
+                        with open(self.file_path, 'r', encoding='utf-8') as f:
+                            soup = BeautifulSoup(f, 'html.parser')
+                            
+                            # Eliminar scripts, estilos y contenido oculto
+                            for script in soup(["script", "style", "meta", "link"]):
+                                script.extract()
+                            
+                            # Extraer el texto
+                            text = soup.get_text(separator=' ')
+                            
+                            # Limpiar el texto
+                            lines = (line.strip() for line in text.splitlines())
+                            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                            text = ' '.join(chunk for chunk in chunks if chunk)
+                            
+                            return [Document(page_content=text, metadata={"source": self.file_path})]
+                    except Exception as e:
+                        logger.error(f"Error al cargar HTML {self.file_path}: {e}")
+                        return [Document(page_content=f"Error al cargar HTML: {str(e)}", metadata={"source": self.file_path})]
+            
+            return SimpleHTMLLoader(file_path)
+        except Exception as e:
+            logger.error(f"Error al crear loader para HTML: {e}")
+            from langchain.docstore.document import Document
+            
+            class VerySimpleHTMLLoader:
+                def __init__(self, file_path):
+                    self.file_path = file_path
+                
+                def load(self):
+                    return [Document(
+                        page_content=f"[Contenido del archivo HTML: {self.file_path}]",
+                        metadata={"source": self.file_path}
+                    )]
+            
+            return VerySimpleHTMLLoader(file_path)
 
 # Crear instancia singleton
 knowledge_service = KnowledgeService()
