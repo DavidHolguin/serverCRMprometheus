@@ -1,5 +1,5 @@
 from typing import Dict, List, Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 import json
 from datetime import datetime
 import logging
@@ -50,7 +50,6 @@ try:
         class UnstructuredExcelLoader(UnstructuredFileLoader):
             """Loader para archivos Excel usando Unstructured"""
             pass
-            
     except ImportError as e:
         # Fallback - utilizar implementaciones más simples si las importaciones fallan
         logger.error(f"Error en importaciones de loaders: {e}")
@@ -270,8 +269,12 @@ class KnowledgeService:
             knowledge_entries = []
             for i, (text, embedding) in enumerate(zip(texts, embeddings_list)):
                 try:
+                    # Usar uuid4() para generar un UUID válido
+                    knowledge_id = uuid4()
+                    logger.debug(f"Creando conocimiento con ID: {knowledge_id}")
+                    
                     knowledge = AgentKnowledge(
-                        id=UUID(),
+                        id=knowledge_id,  # Usar el UUID generado
                         agent_id=agent_id,
                         type="processed_document",
                         source=file_path,
@@ -290,37 +293,49 @@ class KnowledgeService:
                         updated_at=datetime.now()
                     )
                     
+                    # Convertir a diccionario excluyendo embeddings
+                    knowledge_dict = knowledge.model_dump(exclude={'embeddings'})
+                    
+                    # Asegurarnos que el ID esté como string en el diccionario
+                    knowledge_dict['id'] = str(knowledge_id)
+                    knowledge_dict['agent_id'] = str(agent_id)
+                    
                     # Guardar en la base de datos
-                    result = supabase.table("agente_conocimiento").insert(
-                        knowledge.model_dump(exclude={'embeddings'})
-                    ).execute()
+                    result = supabase.table("agente_conocimiento").insert(knowledge_dict).execute()
                     
                     if result.data:
                         # Guardar embeddings en la tabla de vectores
                         vector_data = {
-                            "knowledge_id": str(knowledge.id),
+                            "knowledge_id": str(knowledge_id),
                             "embedding": embedding
                         }
-                        supabase.table("agente_conocimiento_vectores").insert(vector_data).execute()
+                        vector_result = supabase.table("agente_conocimiento_vectores").insert(vector_data).execute()
+                        logger.debug(f"Vector guardado para knowledge_id {knowledge_id}")
                         
                         knowledge_entries.append(knowledge)
+                    else:
+                        logger.warning(f"No se pudo guardar el conocimiento para chunk {i+1}")
                 except Exception as e:
-                    logger.error(f"Error al guardar conocimiento para chunk {i+1}: {e}")
+                    logger.error(f"Error al guardar conocimiento para chunk {i+1}: {str(e)}")
+                    logger.error(traceback.format_exc())
             
             # Registrar evento de procesamiento exitoso
-            event_service.log_event(
-                empresa_id=company_id,
-                event_type="agent_knowledge_added",
-                entidad_origen_tipo="agent",
-                entidad_origen_id=agent_id,
-                resultado="success",
-                detalle=f"Documento procesado exitosamente: {file_path}",
-                metadata={
-                    "file_type": file_type,
-                    "chunks_created": len(texts),
-                    "knowledge_entries": len(knowledge_entries)
-                }
-            )
+            try:
+                event_service.log_event(
+                    empresa_id=company_id,
+                    event_type="agent_knowledge_added",
+                    entidad_origen_tipo="agent",
+                    entidad_origen_id=agent_id,
+                    resultado="success",
+                    detalle=f"Documento procesado exitosamente: {file_path}",
+                    metadata={
+                        "file_type": file_type,
+                        "chunks_created": len(texts),
+                        "knowledge_entries": len(knowledge_entries)
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error al registrar evento de éxito: {str(e)}")
             
             logger.info(f"Procesamiento completo. Guardados {len(knowledge_entries)} chunks de conocimiento")
             return knowledge_entries
@@ -329,19 +344,22 @@ class KnowledgeService:
             logger.error(f"Error procesando documento: {e}")
             logger.error(traceback.format_exc())
             # Registrar evento de error
-            event_service.log_event(
-                empresa_id=company_id,
-                event_type="agent_knowledge_error",
-                entidad_origen_tipo="agent",
-                entidad_origen_id=agent_id,
-                resultado="error",
-                detalle=f"Error procesando documento: {str(e)}",
-                metadata={
-                    "file_type": file_type,
-                    "error": str(e),
-                    "traceback": traceback.format_exc()
-                }
-            )
+            try:
+                event_service.log_event(
+                    empresa_id=company_id,
+                    event_type="agent_knowledge_error",
+                    entidad_origen_tipo="agent",
+                    entidad_origen_id=agent_id,
+                    resultado="error",
+                    detalle=f"Error procesando documento: {str(e)}",
+                    metadata={
+                        "file_type": file_type,
+                        "error": str(e),
+                        "traceback": traceback.format_exc()
+                    }
+                )
+            except Exception as log_err:
+                logger.error(f"Error al registrar evento de error: {str(log_err)}")
             raise
 
     def _get_document_loader(self, file_path: str, file_type: str):
