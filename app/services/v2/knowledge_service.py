@@ -286,8 +286,9 @@ class KnowledgeService:
                     # Fechas en formato ISO para serialización
                     current_time = datetime.now().isoformat()
                     
+                    # Crear objeto de conocimiento
                     knowledge = AgentKnowledge(
-                        id=knowledge_id,  # Usar el UUID generado
+                        id=knowledge_id,
                         agent_id=agent_id,
                         type="processed_document",
                         source=file_path,
@@ -311,11 +312,46 @@ class KnowledgeService:
                     
                     # Asegurarnos que el ID esté como string en el diccionario
                     knowledge_dict['id'] = str(knowledge_id)
-                    knowledge_dict['agent_id'] = str(agent_id)
+                    
+                    # Usar el nombre de columna correcto según la estructura de la base de datos
+                    # Asegurarnos que agente_id se envía correctamente
+                    knowledge_dict['agente_id'] = str(agent_id)
+                    
+                    # Eliminar agent_id si existe (usamos agente_id en su lugar)
+                    if 'agent_id' in knowledge_dict:
+                        del knowledge_dict['agent_id']
                     
                     # Convertir fechas a strings ISO
                     knowledge_dict['created_at'] = knowledge_dict['created_at'].isoformat()
                     knowledge_dict['updated_at'] = knowledge_dict['updated_at'].isoformat()
+                    
+                    # Asegurar que tipo sea 'tipo' (no 'type') según la columna de la tabla
+                    knowledge_dict['tipo'] = knowledge_dict.get('type', 'processed_document')
+                    if 'type' in knowledge_dict:
+                        del knowledge_dict['type']
+                        
+                    # Asegurar que usamos 'fuente' en lugar de 'source'
+                    knowledge_dict['fuente'] = knowledge_dict.get('source', file_path)
+                    if 'source' in knowledge_dict:
+                        del knowledge_dict['source']
+                        
+                    # Asegurar que usamos 'formato' en lugar de 'format'
+                    knowledge_dict['formato'] = knowledge_dict.get('format', 'text_with_embeddings')
+                    if 'format' in knowledge_dict:
+                        del knowledge_dict['format']
+                        
+                    # Asegurar que usamos 'contenido' en lugar de 'content'
+                    knowledge_dict['contenido'] = knowledge_dict.get('content', text.page_content)
+                    if 'content' in knowledge_dict:
+                        del knowledge_dict['content']
+                        
+                    # Asegurar que usamos 'prioridad' en lugar de 'priority'
+                    knowledge_dict['prioridad'] = knowledge_dict.get('priority', 1)
+                    if 'priority' in knowledge_dict:
+                        del knowledge_dict['priority']
+                    
+                    # Debugging - registrar el diccionario antes de enviarlo
+                    logger.debug(f"Enviando a la base de datos: {json.dumps(knowledge_dict)}")
                     
                     # Guardar en la base de datos
                     result = supabase.table("agente_conocimiento").insert(knowledge_dict).execute()
