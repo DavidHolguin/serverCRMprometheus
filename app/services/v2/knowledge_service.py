@@ -27,133 +27,163 @@ try:
     import PyPDF2
     logger.info(f"PyPDF2 importado correctamente. Versión: {PyPDF2.__version__}")
     
-    # Importamos cada loader directamente desde el archivo base
-    # para evitar la carga del módulo language_parser problemático
+    # En LangChain 0.3, los loaders se han movido a paquetes específicos
     try:
-        # Intentar importaciones directas para evitar problemas con módulos intermedios
-        from langchain.document_loaders.csv_loader import CSVLoader
-        from langchain.document_loaders.text import TextLoader
-        # Si hay importaciones más específicas disponibles:
-        from langchain.document_loaders.unstructured import UnstructuredFileLoader
-        # Creamos clases simples para los loaders si es necesario
-        class PyPDFLoader:
-            def __init__(self, file_path):
-                self.file_path = file_path
-            
-            def load(self):
-                from langchain.docstore.document import Document
-                # Lógica básica para cargar un PDF
-                pdf = PyPDF2.PdfReader(self.file_path)
-                return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
-                        for i, page in enumerate(pdf.pages)]
+        # Importaciones para LangChain 0.3
+        from langchain_text_splitters import RecursiveCharacterTextSplitter
+        from langchain_community.document_loaders.csv_loader import CSVLoader
+        # Corrección en la ruta de importación del TextLoader
+        from langchain_community.document_loaders import TextLoader
+        from langchain_community.document_loaders.unstructured import UnstructuredFileLoader
+        from langchain_community.document_loaders.pdf import PyPDFLoader
         
+        # Definimos clases personalizadas basadas en UnstructuredFileLoader
         class UnstructuredWordDocumentLoader(UnstructuredFileLoader):
             """Loader para documentos de Word usando Unstructured"""
-            pass
-        
+            def __init__(self, file_path: str, **kwargs):
+                super().__init__(file_path, **kwargs)
+                
         class UnstructuredExcelLoader(UnstructuredFileLoader):
             """Loader para archivos Excel usando Unstructured"""
-            pass
+            def __init__(self, file_path: str, **kwargs):
+                super().__init__(file_path, **kwargs)
     except ImportError as e:
         # Fallback - utilizar implementaciones más simples si las importaciones fallan
         logger.error(f"Error en importaciones de loaders: {e}")
         # Implementaciones mínimas que pueden funcionar para casos básicos
-        from langchain.docstore.document import Document
+        from langchain_core.documents import Document
         
         class CSVLoader:
-            def __init__(self, file_path):
+            def __init__(self, file_path: str):
                 self.file_path = file_path
-            
+                
             def load(self):
                 import csv
-                docs = []
+                documents = []
                 with open(self.file_path, 'r', encoding='utf-8') as f:
                     csv_reader = csv.reader(f)
                     headers = next(csv_reader)
-                    for row in csv_reader:
-                        content = " ".join(row)
-                        docs.append(Document(page_content=content, metadata={"source": self.file_path}))
-                return docs
-        
+                    for i, row in enumerate(csv_reader):
+                        # Combine headers and row values into a single string
+                        content = "\n".join([f"{headers[i]}: {value}" for i, value in enumerate(row) if i < len(headers)])
+                        document = Document(page_content=content, metadata={"source": self.file_path, "row": i})
+                        documents.append(document)
+                return documents
+                
         class PyPDFLoader:
-            def __init__(self, file_path):
+            def __init__(self, file_path: str):
                 self.file_path = file_path
-            
+                
             def load(self):
-                pdf = PyPDF2.PdfReader(self.file_path)
-                return [Document(page_content=page.extract_text(), metadata={"source": self.file_path, "page": i}) 
-                        for i, page in enumerate(pdf.pages)]
-        
+                documents = []
+                with open(self.file_path, 'rb') as f:
+                    pdf_reader = PyPDF2.PdfReader(f)
+                    for i, page in enumerate(pdf_reader.pages):
+                        text = page.extract_text()
+                        if text.strip():  # Solo añadir si hay texto
+                            document = Document(page_content=text, metadata={"source": self.file_path, "page": i})
+                            documents.append(document)
+                return documents
+                
         class TextLoader:
-            def __init__(self, file_path):
+            def __init__(self, file_path: str):
                 self.file_path = file_path
-            
+                
             def load(self):
                 with open(self.file_path, 'r', encoding='utf-8') as f:
                     text = f.read()
                 return [Document(page_content=text, metadata={"source": self.file_path})]
-        
-        class UnstructuredWordDocumentLoader:
-            def __init__(self, file_path):
+                
+        class UnstructuredFileLoader:
+            def __init__(self, file_path: str, **kwargs):
                 self.file_path = file_path
-            
+                
             def load(self):
-                # Implementación básica para documentos Word
-                return [Document(page_content="[Contenido del documento Word]", metadata={"source": self.file_path})]
-        
-        class UnstructuredExcelLoader:
-            def __init__(self, file_path):
-                self.file_path = file_path
+                # Implementación básica que lee el archivo como texto
+                with open(self.file_path, 'r', encoding='utf-8') as f:
+                    text = f.read()
+                return [Document(page_content=text, metadata={"source": self.file_path})]
+                
+        class UnstructuredWordDocumentLoader(UnstructuredFileLoader):
+            pass
             
-            def load(self):
-                # Implementación básica para Excel
-                return [Document(page_content="[Contenido del archivo Excel]", metadata={"source": self.file_path})]
-
-except ImportError as e:
-    logger.error(f"Error crítico al importar PyPDF2: {e}")
-    # Si PyPDF2 no está disponible, definimos versiones muy básicas de nuestras clases
-    # que al menos no causarán errores al inicializar el servicio
-    from langchain.docstore.document import Document
+        class UnstructuredExcelLoader(UnstructuredFileLoader):
+            pass
+            
+        class RecursiveCharacterTextSplitter:
+            def __init__(self, chunk_size=1000, chunk_overlap=200):
+                self.chunk_size = chunk_size
+                self.chunk_overlap = chunk_overlap
+                
+            def split_documents(self, documents):
+                # Implementación básica para dividir documentos
+                split_docs = []
+                for doc in documents:
+                    text = doc.page_content
+                    # Dividir texto en fragmentos de tamaño aproximado chunk_size con superposición chunk_overlap
+                    start = 0
+                    while start < len(text):
+                        end = start + self.chunk_size
+                        if end > len(text):
+                            end = len(text)
+                        # Crear un nuevo documento con el fragmento
+                        split_docs.append(Document(
+                            page_content=text[start:end],
+                            metadata=doc.metadata
+                        ))
+                        start = end - self.chunk_overlap
+                return split_docs
+except Exception as e:
+    logger.error(f"Error importando las dependencias requeridas: {e}")
+    # Definiciones mínimas para evitar errores de importación
     
-    class PyPDFLoader:
-        def __init__(self, file_path):
-            self.file_path = file_path
-        
-        def load(self):
-            raise ImportError("PyPDF2 no está instalado. No se puede procesar archivos PDF.")
-    
+    class Document:
+        def __init__(self, page_content, metadata=None):
+            self.page_content = page_content
+            self.metadata = metadata or {}
+            
     class CSVLoader:
         def __init__(self, file_path):
             self.file_path = file_path
-        
         def load(self):
-            raise ImportError("Error al cargar las dependencias necesarias.")
-    
+            return []
+            
+    class PyPDFLoader:
+        def __init__(self, file_path):
+            self.file_path = file_path
+        def load(self):
+            return []
+            
     class TextLoader:
         def __init__(self, file_path):
             self.file_path = file_path
-        
-            def load(self):
-                with open(self.file_path, 'r', encoding='utf-8') as f:
-                    text = f.read()
-                return [Document(page_content=text, metadata={"source": self.file_path})]
-    
+        def load(self):
+            return []
+            
+    class UnstructuredFileLoader:
+        def __init__(self, file_path, **kwargs):
+            self.file_path = file_path
+        def load(self):
+            return []
+            
     class UnstructuredWordDocumentLoader:
-        def __init__(self, file_path):
+        def __init__(self, file_path, **kwargs):
             self.file_path = file_path
-        
         def load(self):
-            raise ImportError("No se pueden cargar documentos Word sin las dependencias necesarias.")
-    
+            return []
+            
     class UnstructuredExcelLoader:
-        def __init__(self, file_path):
+        def __init__(self, file_path, **kwargs):
             self.file_path = file_path
-        
         def load(self):
-            raise ImportError("No se pueden cargar archivos Excel sin las dependencias necesarias.")
-
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from supabase.client import Client as SupabaseClient
+            return []
+            
+    class RecursiveCharacterTextSplitter:
+        def __init__(self, chunk_size=1000, chunk_overlap=200):
+            self.chunk_size = chunk_size
+            self.chunk_overlap = chunk_overlap
+        def split_documents(self, documents):
+            return []
 
 from app.core.config import settings
 from app.db.supabase_client import supabase
@@ -221,6 +251,7 @@ class KnowledgeService:
         Limpia el texto eliminando espacios en blanco y saltos de línea innecesarios
         
         Args:
+            text: Texto a limpiar
             text: Texto a limpiar
             
         Returns:
@@ -515,7 +546,7 @@ class KnowledgeService:
                 class PandasExcelLoader:
                     def __init__(self, file_path):
                         self.file_path = file_path
-                    
+                        
                     def load(self):
                         # Leer todas las hojas del archivo Excel
                         sheets_dict = pd.read_excel(self.file_path, sheet_name=None)
@@ -533,7 +564,7 @@ class KnowledgeService:
                             documents.append(doc)
                         
                         return documents
-                
+                        
                 return PandasExcelLoader(file_path)
             except ImportError:
                 # Si pandas no está disponible, usar UnstructuredExcelLoader
@@ -546,7 +577,7 @@ class KnowledgeService:
             class SimpleExcelLoader:
                 def __init__(self, file_path):
                     self.file_path = file_path
-                
+                    
                 def load(self):
                     return [Document(
                         page_content=f"[Contenido del archivo Excel: {self.file_path}]",
@@ -579,7 +610,7 @@ class KnowledgeService:
                 class SimpleWebLoader:
                     def __init__(self, url):
                         self.url = url
-                    
+                        
                     def load(self):
                         try:
                             response = requests.get(self.url)
@@ -590,9 +621,11 @@ class KnowledgeService:
                             for script in soup(["script", "style", "meta", "link"]):
                                 script.extract()
                             
+
                             # Extraer el texto
                             text = soup.get_text(separator=' ')
                             
+
                             # Limpiar el texto
                             lines = (line.strip() for line in text.splitlines())
                             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
@@ -612,7 +645,7 @@ class KnowledgeService:
             class VerySimpleWebLoader:
                 def __init__(self, url):
                     self.url = url
-                
+                    
                 def load(self):
                     return [Document(
                         page_content=f"[Contenido de la URL: {self.url}]",
@@ -639,7 +672,7 @@ class KnowledgeService:
             class SimpleHTMLLoader:
                 def __init__(self, file_path):
                     self.file_path = file_path
-                
+                    
                 def load(self):
                     try:
                         with open(self.file_path, 'r', encoding='utf-8') as f:
@@ -649,9 +682,11 @@ class KnowledgeService:
                             for script in soup(["script", "style", "meta", "link"]):
                                 script.extract()
                             
+
                             # Extraer el texto
                             text = soup.get_text(separator=' ')
                             
+
                             # Limpiar el texto
                             lines = (line.strip() for line in text.splitlines())
                             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
@@ -670,7 +705,7 @@ class KnowledgeService:
             class VerySimpleHTMLLoader:
                 def __init__(self, file_path):
                     self.file_path = file_path
-                
+                    
                 def load(self):
                     return [Document(
                         page_content=f"[Contenido del archivo HTML: {self.file_path}]",
