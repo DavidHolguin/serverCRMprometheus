@@ -8,12 +8,18 @@ WORKDIR /app
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 # Instalar dependencias del sistema incluyendo ffmpeg para procesamiento de audio
-# Usar apt-get en una sola línea para reducir capas y aplicar limpieza en la misma capa
+# y dependencias para navegadores headless (necesarias para carga de URLs)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
     python3-dev \
     ffmpeg \
+    # Dependencias para navegadores headless
+    wget \
+    gnupg \
+    ca-certificates \
+    # Dependencias para procesamiento de PDF
+    poppler-utils \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -23,6 +29,9 @@ COPY requirements.txt .
 # Instalar todas las dependencias de una vez utilizando el archivo requirements.txt
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
+    # Instalar navegadores para Playwright (necesarios para carga de URLs)
+    pip install playwright && \
+    playwright install --with-deps chromium && \
     pip cache purge
 
 # Copiar el resto de la aplicación

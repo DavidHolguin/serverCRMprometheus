@@ -7,6 +7,7 @@ import sys
 import importlib.util
 import traceback
 import re
+import os
 
 # Importación necesaria para la serialización de datetime
 from datetime import datetime, timezone
@@ -501,8 +502,52 @@ class KnowledgeService:
             Loader apropiado para el tipo de archivo
         """
         try:
+            # Verificar que el tipo de archivo sea válido
+            file_type = file_type.lower()
+            logger.info(f"Obteniendo loader para archivo de tipo: {file_type}")
+            
+            # Si es un PDF, intentar primero con el loader de LangChain Community
+            if file_type == "pdf":
+                try:
+                    # Importar explícitamente pypdf para verificar que esté disponible
+                    try:
+                        import pypdf
+                        logger.info(f"pypdf importado correctamente: {pypdf.__version__}")
+                        from langchain_community.document_loaders.pdf import PyPDFLoader
+                        return PyPDFLoader(file_path)
+                    except ImportError:
+                        # Si pypdf falla, intentar con PyPDF2 (anterior)
+                        import PyPDF2
+                        logger.info(f"PyPDF2 importado como alternativa: {PyPDF2.__version__}")
+                        
+                        # Implementar un loader personalizado con PyPDF2
+                        from langchain_core.documents import Document
+                        
+                        class CustomPyPDF2Loader:
+                            def __init__(self, file_path):
+                                self.file_path = file_path
+                                
+                            def load(self):
+                                with open(self.file_path, 'rb') as f:
+                                    pdf = PyPDF2.PdfReader(f)
+                                    documents = []
+                                    for i, page in enumerate(pdf.pages):
+                                        text = page.extract_text()
+                                        if text.strip():  # Solo añadir si hay texto
+                                            doc = Document(
+                                                page_content=text,
+                                                metadata={"source": self.file_path, "page": i}
+                                            )
+                                            documents.append(doc)
+                                return documents
+                                
+                        return CustomPyPDF2Loader(file_path)
+                except Exception as pdf_error:
+                    logger.error(f"Error al intentar cargar PDF usando ambos métodos: {pdf_error}")
+                    raise ValueError(f"Error al obtener loader para pdf: {str(pdf_error)}")
+            
+            # Mapa de tipos de archivo a loaders
             loaders = {
-                "pdf": PyPDFLoader,
                 "csv": CSVLoader,
                 "txt": TextLoader,
                 "docx": UnstructuredWordDocumentLoader,
@@ -512,7 +557,7 @@ class KnowledgeService:
                 "html": self._get_html_loader
             }
             
-            loader_func_or_class = loaders.get(file_type.lower())
+            loader_func_or_class = loaders.get(file_type)
             if not loader_func_or_class:
                 raise ValueError(f"Tipo de archivo no soportado: {file_type}")
                 
@@ -524,6 +569,7 @@ class KnowledgeService:
                 return loader_func_or_class(file_path)
         except Exception as e:
             logger.error(f"Error al obtener loader para {file_type}: {e}")
+            logger.error(traceback.format_exc())
             raise
     
     def _get_excel_loader(self, file_path):
@@ -588,7 +634,7 @@ class KnowledgeService:
     
     def _get_url_loader(self, url):
         """
-        Obtiene un loader para URLs
+        Obtiene un loader para URLs utilizando Playwright para una mejor extracción de contenido
         
         Args:
             url: URL a cargar
@@ -597,122 +643,335 @@ class KnowledgeService:
             Loader para URLs
         """
         try:
-            # Intentar importar el loader de URLs
+            # Intentar cargar con Playwright para mejor compatibilidad
             try:
-                from langchain.document_loaders import WebBaseLoader
-                return WebBaseLoader(url)
-            except ImportError:
-                # Si no está disponible, crear un loader simple
-                import requests
-                from bs4 import BeautifulSoup
-                from langchain.docstore.document import Document
+                # Importar dependencias necesarias
+                import nest_asyncio
+                from playwright.async_api import async_playwright
+                from langchain_core.documents import Document
+                import asyncio
                 
-                class SimpleWebLoader:
+                # Aplicar nest_asyncio para permitir bucles anidados (necesario si se ejecuta desde un notebook o entorno interactivo)
+                try:
+                    nest_asyncio.apply()
+                except:
+                    logger.warning("Error al aplicar nest_asyncio, podría causar problemas en algunos entornos")
+                
+                # Crear una clase loader personalizada con Playwright
+                class PlaywrightURLLoader:
                     def __init__(self, url):
                         self.url = url
+                    
+                    async def _load_with_playwright(self):
+                        try:
+                            documents = []
+                            async with async_playwright() as p:
+                                browser = await p.chromium.launch(headless=True)
+                                page = await browser.new_page()
+                                
+                                # Agregar logger para depuración
+                                logger.info(f"Navegando a URL: {self.url}")
+                                
+                                # Navegar a la página con timeout adecuado
+                                await page.goto(self.url, wait_until="domcontentloaded", timeout=30000)
+                                
+                                # Esperar a que la página cargue completamente
+                                await page.wait_for_load_state("networkidle", timeout=10000)
+                                
+                                # Extraer el contenido y metadatos
+                                content = await page.content()
+                                title = await page.title()
+                                
+                                # Obtener el texto principal de la página
+                                text = await page.evaluate('''() => {
+                                    // Seleccionar el contenido principal, excluyendo elementos de navegación, etc.
+                                    // Primero intentar con article, main o #content
+                                    const mainContent = document.querySelector('article, main, #content, .content, .article, .post');
+                                    
+                                    if (mainContent) {
+                                        return mainContent.innerText;
+                                    }
+                                    
+                                    // Si no encontramos contenido principal, usar el body pero excluir elementos típicos de navegación
+                                    const body = document.body;
+                                    const excludeElements = document.querySelectorAll('nav, header, footer, aside, .sidebar, .menu, .ad, .advertisement');
+                                    
+                                    // Clonar el body para no modificar la página original
+                                    const bodyClone = body.cloneNode(true);
+                                    
+                                    // Eliminar elementos a excluir
+                                    excludeElements.forEach(el => {
+                                        const elInClone = bodyClone.querySelector(`#${el.id}`) || 
+                                                        bodyClone.querySelector(`.${Array.from(el.classList).join('.')}`);
+                                        if (elInClone) {
+                                            elInClone.remove();
+                                        }
+                                    });
+                                    
+                                    return bodyClone.innerText;
+                                }''')
+                                
+                                # Limpiar el texto
+                                cleaned_text = self._clean_text(text)
+                                
+                                # Crear metadata útil
+                                metadata = {
+                                    "source": self.url,
+                                    "title": title,
+                                    "content_type": "url"
+                                }
+                                
+                                # Crear documento
+                                documents.append(Document(
+                                    page_content=cleaned_text,
+                                    metadata=metadata
+                                ))
+                                
+                                # Cerrar el navegador
+                                await browser.close()
+                                
+                            return documents
+                        except Exception as e:
+                            logger.error(f"Error en PlaywrightURLLoader: {e}")
+                            # Retornar un documento con un mensaje de error
+                            return [Document(
+                                page_content=f"Error al cargar URL con Playwright: {str(e)}",
+                                metadata={"source": self.url, "error": True}
+                            )]
+                    
+                    def _clean_text(self, text):
+                        """Limpia el texto extraído"""
+                        import re
                         
+                        # Eliminar espacios en blanco extra
+                        text = re.sub(r'\s+', ' ', text)
+                        
+                        # Eliminar líneas vacías
+                        text = re.sub(r'\n\s*\n', '\n', text)
+                        
+                        # Eliminar espacios al inicio y fin
+                        text = text.strip()
+                        
+                        return text
+                    
+                    def load(self):
+                        """Carga la URL usando Playwright"""
+                        try:
+                            # Ejecutar la función asíncrona en el bucle de eventos
+                            loop = asyncio.get_event_loop()
+                            return loop.run_until_complete(self._load_with_playwright())
+                        except Exception as e:
+                            logger.error(f"Error al ejecutar PlaywrightURLLoader: {e}")
+                            # Retornar un documento con mensaje de error
+                            return [Document(
+                                page_content=f"Error al cargar URL: {str(e)}",
+                                metadata={"source": self.url, "error": True}
+                            )]
+                
+                # Retornar el loader personalizado
+                logger.info(f"Usando PlaywrightURLLoader para URL: {url}")
+                return PlaywrightURLLoader(url)
+                
+            except ImportError as e:
+                logger.warning(f"No se pudo importar Playwright: {e}. Intentando método alternativo...")
+                
+                # Si Playwright no está disponible, intentar con BeautifulSoup y requests
+                import requests
+                from bs4 import BeautifulSoup
+                from langchain_core.documents import Document
+                
+                class BeautifulSoupURLLoader:
+                    def __init__(self, url):
+                        self.url = url
+                    
                     def load(self):
                         try:
-                            response = requests.get(self.url)
+                            # Configurar headers para simular un navegador
+                            headers = {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                            }
+                            
+                            # Realizar la solicitud HTTP
+                            response = requests.get(self.url, headers=headers, timeout=30)
                             response.raise_for_status()
+                            
+                            # Parsear el contenido HTML
                             soup = BeautifulSoup(response.content, 'html.parser')
                             
-                            # Eliminar scripts, estilos y contenido oculto
-                            for script in soup(["script", "style", "meta", "link"]):
-                                script.extract()
+                            # Eliminar tags no deseados
+                            for tag in soup(["script", "style", "noscript", "iframe", "head", "meta", "link"]):
+                                tag.decompose()
                             
 
+                            # Intentar extraer el contenido principal
+                            main_content = None
+                            
+                            # Buscar por tags comunes para contenido principal
+                            for selector in ['article', 'main', '#content', '.content', '.article', '.post']:
+                                content = soup.select_one(selector)
+                                if content:
+                                    main_content = content
+                                    break
+                            
+                            # Si no encontramos contenido principal, usar el body
+                            if not main_content:
+                                main_content = soup.body
+                            
                             # Extraer el texto
-                            text = soup.get_text(separator=' ')
+                            if main_content:
+                                text = main_content.get_text(separator=' ')
+                            else:
+                                text = soup.get_text(separator=' ')
                             
-
                             # Limpiar el texto
                             lines = (line.strip() for line in text.splitlines())
                             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
                             text = ' '.join(chunk for chunk in chunks if chunk)
                             
-                            return [Document(page_content=text, metadata={"source": self.url})]
+                            # Obtener título
+                            title = soup.title.string if soup.title else ""
+                            
+                            # Crear documento
+                            return [Document(
+                                page_content=text,
+                                metadata={
+                                    "source": self.url,
+                                    "title": title,
+                                    "content_type": "url"
+                                }
+                            )]
                         except Exception as e:
-                            logger.error(f"Error al cargar URL {self.url}: {e}")
-                            return [Document(page_content=f"Error al cargar URL: {str(e)}", metadata={"source": self.url})]
+                            logger.error(f"Error al cargar URL {self.url} con BeautifulSoup: {e}")
+                            return [Document(
+                                page_content=f"Error al cargar URL: {str(e)}",
+                                metadata={"source": self.url, "error": True}
+                            )]
                 
-                return SimpleWebLoader(url)
+                logger.info(f"Usando BeautifulSoupURLLoader para URL: {url}")
+                return BeautifulSoupURLLoader(url)
+                
         except Exception as e:
             logger.error(f"Error al crear loader para URL: {e}")
-            # Utilizar un loader muy simple como fallback
-            from langchain.docstore.document import Document
             
-            class VerySimpleWebLoader:
+            # Utilizar un loader muy simple como último recurso
+            from langchain_core.documents import Document
+            
+            class SimpleURLLoader:
                 def __init__(self, url):
                     self.url = url
                     
                 def load(self):
-                    return [Document(
-                        page_content=f"[Contenido de la URL: {self.url}]",
-                        metadata={"source": self.url}
-                    )]
+                    try:
+                        import requests
+                        response = requests.get(self.url)
+                        text = f"[Contenido extraído de {self.url}]\n\n{response.text[:10000]}..."  # Limitar tamaño
+                        return [Document(
+                            page_content=text,
+                            metadata={"source": self.url}
+                        )]
+                    except:
+                        return [Document(
+                            page_content=f"No se pudo cargar el contenido de {self.url}",
+                            metadata={"source": self.url, "error": True}
+                        )]
             
-            return VerySimpleWebLoader(url)
-    
-    def _get_html_loader(self, file_path):
+            logger.info(f"Usando SimpleURLLoader para URL como último recurso: {url}")
+            return SimpleURLLoader(url)
+        
+    def _get_html_loader(self, file_path_or_html):
         """
-        Obtiene un loader para archivos HTML
+        Obtiene un loader para archivos HTML o contenido HTML
         
         Args:
-            file_path: Ruta al archivo HTML
+            file_path_or_html: Ruta al archivo HTML o contenido HTML
             
         Returns:
-            Loader para archivos HTML
+            Loader para HTML
         """
         try:
-            # Intentar importar el loader de HTML
-            from bs4 import BeautifulSoup
-            from langchain.docstore.document import Document
+            # Determinar si es una ruta a archivo o contenido HTML
+            is_file = os.path.isfile(file_path_or_html) if isinstance(file_path_or_html, str) else False
+            from langchain_core.documents import Document
             
-            class SimpleHTMLLoader:
-                def __init__(self, file_path):
-                    self.file_path = file_path
-                    
+            # Crear clase personalizada para cargar HTML
+            class CustomHTMLLoader:
+                def __init__(self, source):
+                    self.source = source
+                    self.is_file = os.path.isfile(source) if isinstance(source, str) else False
+                
                 def load(self):
                     try:
-                        with open(self.file_path, 'r', encoding='utf-8') as f:
-                            soup = BeautifulSoup(f, 'html.parser')
-                            
-                            # Eliminar scripts, estilos y contenido oculto
-                            for script in soup(["script", "style", "meta", "link"]):
-                                script.extract()
-                            
-
-                            # Extraer el texto
-                            text = soup.get_text(separator=' ')
-                            
-
-                            # Limpiar el texto
-                            lines = (line.strip() for line in text.splitlines())
-                            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                            text = ' '.join(chunk for chunk in chunks if chunk)
-                            
-                            return [Document(page_content=text, metadata={"source": self.file_path})]
+                        html_content = ""
+                        if self.is_file:
+                            # Leer el archivo HTML
+                            with open(self.source, 'r', encoding='utf-8') as f:
+                                html_content = f.read()
+                        else:
+                            # Usar directamente si ya es contenido HTML
+                            html_content = self.source
+                        
+                        # Usar BeautifulSoup para parsear HTML
+                        from bs4 import BeautifulSoup
+                        
+                        # Parsear el HTML
+                        soup = BeautifulSoup(html_content, 'html.parser')
+                        
+                        # Eliminar tags no deseados
+                        for tag in soup(['script', 'style', 'meta', 'noscript', 'header', 'footer', 'nav']):
+                            tag.decompose()
+                        
+                        # Extraer texto del contenido principal
+                        main_content = soup.find('main') or soup.find('article') or soup.find('div', {'class': 'content'})
+                        if main_content:
+                            text = main_content.get_text(separator=' ')
+                        else:
+                            # Si no hay contenido principal, usar el body completo
+                            text = soup.body.get_text(separator=' ') if soup.body else soup.get_text(separator=' ')
+                        
+                        # Limpiar el texto
+                        import re
+                        text = re.sub(r'\s+', ' ', text)  # Reemplazar múltiples espacios por uno solo
+                        text = text.strip()  # Eliminar espacios al inicio y al final
+                        
+                        # Obtener título
+                        title = soup.title.string if soup.title else ""
+                        
+                        # Crear un documento con el texto extraído
+                        return [Document(
+                            page_content=text,
+                            metadata={
+                                "source": self.source if self.is_file else "html_content",
+                                "title": title,
+                                "content_type": "html"
+                            }
+                        )]
                     except Exception as e:
-                        logger.error(f"Error al cargar HTML {self.file_path}: {e}")
-                        return [Document(page_content=f"Error al cargar HTML: {str(e)}", metadata={"source": self.file_path})]
+                        logger.error(f"Error al procesar HTML: {e}")
+                        # Devolver un documento con mensaje de error
+                        return [Document(
+                            page_content="Error al procesar contenido HTML",
+                            metadata={"source": self.source if self.is_file else "html_content", "error": True}
+                        )]
+                        
+            # Crear y devolver el loader
+            return CustomHTMLLoader(file_path_or_html)
             
-            return SimpleHTMLLoader(file_path)
         except Exception as e:
-            logger.error(f"Error al crear loader para HTML: {e}")
-            from langchain.docstore.document import Document
+            logger.error(f"Error al crear loader HTML: {e}")
+            from langchain_core.documents import Document
             
-            class VerySimpleHTMLLoader:
-                def __init__(self, file_path):
-                    self.file_path = file_path
-                    
+            # Crear un loader simple como fallback
+            class SimpleHTMLLoader:
+                def __init__(self, source):
+                    self.source = source
+                
                 def load(self):
                     return [Document(
-                        page_content=f"[Contenido del archivo HTML: {self.file_path}]",
-                        metadata={"source": self.file_path}
+                        page_content="No se pudo procesar el contenido HTML",
+                        metadata={"source": self.source}
                     )]
             
-            return VerySimpleHTMLLoader(file_path)
+            return SimpleHTMLLoader(file_path_or_html)
 
 # Crear instancia singleton
 knowledge_service = KnowledgeService()
