@@ -25,7 +25,8 @@ pandas==2.0.3
 openpyxl==3.1.2
 beautifulsoup4==4.12.2
 bs4==0.0.1  # Este paquete es un alias que instala beautifulsoup4
-tiktoken==0.5.1
+# Actualizado tiktoken para ser compatible con langchain-openai que requiere >=0.7,<1
+tiktoken>=0.7.0,<1.0.0
 # Dependencia de LangChain
 langsmith>=0.1.0,<0.2.0
 # Nuevo paquete para divisores de texto (movidos desde el paquete principal)
