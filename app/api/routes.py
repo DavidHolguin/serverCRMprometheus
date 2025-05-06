@@ -302,27 +302,27 @@ async def handle_whatsapp_webhook(request: Request):
                         canal_id = UUID(channel_result.data[0]["id"])
 
                         # Verificar si el número es el especializado (+573156496913 o +573161336404)
-                        # y usar el agente especializado en rendimiento si corresponde
-                        use_agent = False
-                        agent_id = None
+                        # y usar chatbot especializado en rendimiento
+                        use_specialized_chatbot = False
+                        specialized_chatbot_id = UUID("c5fdb8dc-38cb-425a-b760-3ca6c4a32621")
                         
-                        if phone_number == "+573156496913" or phone_number == "573161336404":
-                            logger.info(f"Número especializado detectado: {phone_number}. Asignando agente de rendimiento.")
-                            # Usamos un agente especializado en rendimiento
-                            agent_id = UUID("721d4dbd-6684-432f-8eb6-4245fc95ec44")
-                            use_agent = True
+                        if phone_number == "+573156496913" or phone_number == "+573161336404":
+                            logger.info(f"Número especializado detectado: {phone_number}. Asignando chatbot de rendimiento.")
+                            # Usamos el chatbot especializado en rendimiento
+                            chatbot_id = specialized_chatbot_id
+                            use_specialized_chatbot = True
 
-                            # Obtener la empresa_id correspondiente a este agente
-                            agent_result = supabase.table("agentes").select("empresa_id").eq("id", str(agent_id)).limit(1).execute()
-                            if not agent_result.data:
-                                logger.warning(f"No se encontró información del agente especializado (ID: {agent_id}). Usando chatbot por defecto.")
-                                use_agent = False
+                            # Obtener la empresa_id correspondiente a este chatbot
+                            chatbot_result = supabase.table("chatbots").select("empresa_id").eq("id", str(chatbot_id)).limit(1).execute()
+                            if not chatbot_result.data:
+                                logger.warning(f"No se encontró información del chatbot especializado (ID: {chatbot_id}). Usando chatbot por defecto.")
+                                use_specialized_chatbot = False
                             else:
-                                empresa_id = UUID(agent_result.data[0]["empresa_id"])
-                                logger.info(f"Usando agente especializado en rendimiento: {agent_id} para empresa: {empresa_id}")
-                       
-                        # Si no usamos un agente especializado, seguimos con el flujo normal de chatbots
-                        if not use_agent:
+                                empresa_id = UUID(chatbot_result.data[0]["empresa_id"])
+                                logger.info(f"Usando chatbot especializado en rendimiento: {chatbot_id} para empresa: {empresa_id}")
+                        
+                        # Si no usamos un chatbot especializado, seguimos con el flujo normal de chatbots
+                        if not use_specialized_chatbot:
                             # Buscar configuración de chatbot activa para este canal
                             chatbot_channel_result = supabase.table("chatbot_canales").select("chatbot_id").eq("canal_id", str(canal_id)).eq("is_active", True).limit(1).execute()
                             if not chatbot_channel_result.data:
@@ -426,11 +426,10 @@ async def handle_whatsapp_webhook(request: Request):
                         }
                         
                         # Agregar información adicional para el número especializado
-                        if (phone_number == "+573156496913" or phone_number == "573161336404") and use_agent:
+                        if (phone_number == "+573156496913" or phone_number == "+573161336404") and use_specialized_chatbot:
                             metadata_for_service["es_numero_especializado"] = True
                             metadata_for_service["tipo_especializado"] = "rendimiento"
-                            metadata_for_service["agent_id"] = str(agent_id)
-                            metadata_for_service["usar_agente"] = True
+                            metadata_for_service["chatbot_rendimiento_id"] = str(specialized_chatbot_id)
                         
                         # 5. Procesar el mensaje según su tipo
                         try:
@@ -438,35 +437,15 @@ async def handle_whatsapp_webhook(request: Request):
                                 # Procesar mensaje de texto normal
                                 logger.debug(f"Llamando a process_channel_message para lead {lead_id}")
                                 
-                                if use_agent and agent_id:
-                                    # Para el número especializado, usamos el agente especializado
-                                    # Aquí debería ir la lógica de procesamiento con el agente
-                                    # Pero mantenemos la misma interfaz de conversation_service por ahora
-                                    logger.info(f"Procesando mensaje con agente especializado {agent_id}")
-                                    
-                                    # Utilizamos el canal de WhatsApp para mantener la respuesta, pero
-                                    # incluimos el ID del agente en los metadatos para que el servicio
-                                    # de conversación lo utilice si está implementado
-                                    response_data = conversation_service.process_channel_message(
-                                        canal_id=canal_id,
-                                        canal_identificador=phone_number,
-                                        empresa_id=empresa_id,
-                                        chatbot_id=UUID("00000000-0000-0000-0000-000000000000"), # Placeholder
-                                        mensaje=message_body,
-                                        lead_id=lead_id,
-                                        metadata=metadata_for_service
-                                    )
-                                else:
-                                    # Flujo normal con chatbots
-                                    response_data = conversation_service.process_channel_message(
-                                        canal_id=canal_id,
-                                        canal_identificador=phone_number,
-                                        empresa_id=empresa_id,
-                                        chatbot_id=chatbot_id,
-                                        mensaje=message_body,
-                                        lead_id=lead_id,
-                                        metadata=metadata_for_service
-                                    )
+                                response_data = conversation_service.process_channel_message(
+                                    canal_id=canal_id,
+                                    canal_identificador=phone_number,
+                                    empresa_id=empresa_id,
+                                    chatbot_id=chatbot_id,
+                                    mensaje=message_body,
+                                    lead_id=lead_id,
+                                    metadata=metadata_for_service
+                                )
                                 logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
                             
                             elif message_type == "audio":
@@ -488,30 +467,15 @@ async def handle_whatsapp_webhook(request: Request):
                                         "origin": "whatsapp"
                                     }
                                     
-                                    # Procesar el audio de forma asíncrona 
-                                    # Si estamos usando el agente especializado, incluimos la información en los metadatos
-                                    # pero mantenemos la misma interfaz del servicio audio_service
-                                    if use_agent and agent_id:
-                                        logger.info(f"Procesando audio con agente especializado {agent_id}")
-                                        response_data = await audio_service.process_whatsapp_audio(
-                                            canal_id=canal_id,
-                                            phone_number=phone_number,
-                                            empresa_id=empresa_id,
-                                            chatbot_id=UUID("00000000-0000-0000-0000-000000000000"), # Placeholder
-                                            audio_id=audio_id,
-                                            lead_id=lead_id,
-                                            metadata=audio_metadata
-                                        )
-                                    else:
-                                        response_data = await audio_service.process_whatsapp_audio(
-                                            canal_id=canal_id,
-                                            phone_number=phone_number,
-                                            empresa_id=empresa_id,
-                                            chatbot_id=chatbot_id,
-                                            audio_id=audio_id,
-                                            lead_id=lead_id,
-                                            metadata=audio_metadata
-                                        )
+                                    response_data = await audio_service.process_whatsapp_audio(
+                                        canal_id=canal_id,
+                                        phone_number=phone_number,
+                                        empresa_id=empresa_id,
+                                        chatbot_id=chatbot_id,
+                                        audio_id=audio_id,
+                                        lead_id=lead_id,
+                                        metadata=audio_metadata
+                                    )
                                     
                                     logger.info(f"Audio de WhatsApp procesado exitosamente. Transcripción: {response_data.get('transcripcion')[:50]}...")
                                     logger.info(f"Respuesta generada para {phone_number} (Lead: {lead_id}): {response_data.get('respuesta')[:50]}...")
@@ -522,26 +486,15 @@ async def handle_whatsapp_webhook(request: Request):
                                         # Responder al usuario indicando que hubo un problema con el audio
                                         fallback_message = "Lo siento, hubo un problema al procesar tu mensaje de audio. ¿Podrías intentar enviar un mensaje de texto?"
                                         
-                                        if use_agent and agent_id:
-                                            conversation_service.process_channel_message(
-                                                canal_id=canal_id,
-                                                canal_identificador=phone_number,
-                                                empresa_id=empresa_id,
-                                                chatbot_id=UUID("00000000-0000-0000-0000-000000000000"), # Placeholder
-                                                mensaje=fallback_message,
-                                                lead_id=lead_id,
-                                                metadata={**metadata_for_service, "error_audio": str(e_audio), "is_system_message": True}
-                                            )
-                                        else:
-                                            conversation_service.process_channel_message(
-                                                canal_id=canal_id,
-                                                canal_identificador=phone_number,
-                                                empresa_id=empresa_id,
-                                                chatbot_id=chatbot_id,
-                                                mensaje=fallback_message,
-                                                lead_id=lead_id,
-                                                metadata={**metadata_for_service, "error_audio": str(e_audio), "is_system_message": True}
-                                            )
+                                        conversation_service.process_channel_message(
+                                            canal_id=canal_id,
+                                            canal_identificador=phone_number,
+                                            empresa_id=empresa_id,
+                                            chatbot_id=chatbot_id,
+                                            mensaje=fallback_message,
+                                            lead_id=lead_id,
+                                            metadata={**metadata_for_service, "error_audio": str(e_audio), "is_system_message": True}
+                                        )
                                     except Exception as e_fallback:
                                         logger.error(f"Error al enviar mensaje de fallback: {str(e_fallback)}", exc_info=True)
 
