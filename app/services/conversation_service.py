@@ -184,6 +184,10 @@ class ConversationService:
             Response data including the message ID, conversation ID, and response
         """
         try:
+            # Initialize metadata if None
+            if metadata is None:
+                metadata = {}
+                
             # Get or create lead if not provided
             if not lead_id:
                 # Ya no usamos nombres ni datos personales del metadata
@@ -201,7 +205,11 @@ class ConversationService:
             # Verificar si el chatbot está activo para esta conversación
             chatbot_activo = conversation.get("chatbot_activo", True)
             
+            # Verificar si estamos usando el chatbot especializado en rendimiento
+            is_specialized_chatbot = metadata.get("es_numero_especializado", False) and metadata.get("tipo_especializado") == "rendimiento"
+            
             # Guardar mensaje sanitizado (independientemente de si el chatbot está activo)
+            from app.services.langchain_service import langchain_service
             user_message = langchain_service.save_message(conversation_id, sanitized_mensaje, is_user=True)
             
             # Registrar evento de mensaje recibido
@@ -215,6 +223,7 @@ class ConversationService:
             if metadata:
                 # Eliminamos cualquier dato personal de los metadatos
                 safe_metadata = self.sanitize_metadata(metadata)
+                
                 # Actualizar metadata del mensaje si es necesario
                 if user_message.get("id"):
                     supabase.table("mensajes").update({"metadata": safe_metadata}).eq("id", user_message["id"]).execute()
@@ -256,14 +265,53 @@ class ConversationService:
                         }
                     }
                     
-                    response = langchain_service.generate_response(
-                        conversation_id, 
-                        chatbot_id, 
-                        empresa_id, 
-                        sanitized_mensaje,
-                        config=langchain_config,
-                        special_format=True
-                    )
+                    # Si estamos usando el chatbot especializado en rendimiento
+                    if is_specialized_chatbot:
+                        # Agregar contexto especial para consultas de rendimiento
+                        langchain_config["rendimiento"] = {
+                            "especializacion": "rendimiento",
+                            "tablas_disponibles": ["dim_entidades", "fact_eventos_acciones", 
+                                                  "dim_tipos_eventos", "dim_tipos_accion"],
+                            "permitir_consultas_sql": True
+                        }
+                        
+                        # Modificamos el mensaje para agregar instrucciones al LLM sobre cómo manejar esta consulta
+                        context_prefix = """
+[IMPORTANTE: Eres un chatbot especializado en responder consultas de rendimiento y datos específicos. 
+Tienes acceso a las siguientes tablas: dim_entidades, fact_eventos_acciones, dim_tipos_eventos, dim_tipos_accion.
+
+Cuando te soliciten información específica, extrae los parámetros relevantes de la consulta como:
+- tipo_entidad de dim_entidades 
+- número de mensajes por agente
+- datos de rendimiento
+- estadísticas de eventos
+
+Simula la ejecución de una consulta SQL para responder preguntas específicas. Formula tu respuesta como si hubieras consultado la base de datos.
+
+Ejemplo de consulta simulada: 
+SELECT nombre, count(*) as total FROM fact_eventos_acciones WHERE tipo_evento_id IN (SELECT tipo_evento_id FROM dim_tipos_eventos WHERE categoria = 'mensaje') GROUP BY nombre]
+
+"""
+                        enhanced_message = context_prefix + sanitized_mensaje
+                        
+                        response = langchain_service.generate_response(
+                            conversation_id, 
+                            chatbot_id, 
+                            empresa_id, 
+                            enhanced_message,
+                            config=langchain_config,
+                            special_format=True
+                        )
+                    else:
+                        # Comportamiento normal para otros números
+                        response = langchain_service.generate_response(
+                            conversation_id, 
+                            chatbot_id, 
+                            empresa_id, 
+                            sanitized_mensaje,
+                            config=langchain_config,
+                            special_format=True
+                        )
                     
                     # Calcular duración de procesamiento
                     processing_duration = (datetime.utcnow() - start_time).total_seconds()
