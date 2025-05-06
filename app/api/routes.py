@@ -306,7 +306,7 @@ async def handle_whatsapp_webhook(request: Request):
                         use_agent = False
                         agent_id = None
                         
-                        if phone_number == "+573156496913" or phone_number == "+573161336404":
+                        if phone_number == "+573156496913" or phone_number == "573161336404":
                             logger.info(f"Número especializado detectado: {phone_number}. Asignando agente de rendimiento.")
                             # Usamos un agente especializado en rendimiento
                             agent_id = UUID("721d4dbd-6684-432f-8eb6-4245fc95ec44")
@@ -426,7 +426,7 @@ async def handle_whatsapp_webhook(request: Request):
                         }
                         
                         # Agregar información adicional para el número especializado
-                        if (phone_number == "+573156496913" or phone_number == "+573161336404") and use_agent:
+                        if (phone_number == "+573156496913" or phone_number == "573161336404") and use_agent:
                             metadata_for_service["es_numero_especializado"] = True
                             metadata_for_service["tipo_especializado"] = "rendimiento"
                             metadata_for_service["agent_id"] = str(agent_id)
