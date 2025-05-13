@@ -137,7 +137,7 @@ async def create_lead_from_form(form_data: LeadFormData):
             "tipo_entidad": "lead",
             "entidad_original_id": str(lead_id),
             "nombre": form_data.nombre,
-            "descripcion": "Lead creado desde formulario web",
+            "descripcion": " Lead creado desde formulario web",
             "metadata": {
                 "email": form_data.email,
                 "telefono": form_data.telefono,
