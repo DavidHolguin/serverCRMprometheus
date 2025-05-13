@@ -33,6 +33,8 @@ selenium>=4.10.0
 playwright>=1.40.0
 # Actualizado tiktoken para ser compatible con langchain-openai que requiere >=0.7,<1
 tiktoken>=0.7.0,<1.0.0
+# Dependencia para validación de email
+email-validator>=2.0.0
 # Dependencia de LangChain
 langsmith>=0.1.0,<0.2.0
 # Nuevo paquete para divisores de texto (movidos desde el paquete principal)
