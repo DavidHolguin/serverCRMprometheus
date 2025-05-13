@@ -165,7 +165,7 @@ async def create_lead_from_form(form_data: LeadFormData):
                 .execute()
         
         # 6. Registrar evento y metadata
-        event_data = {
+        event_data =  {
             "origen_url": str(form_data.origen_url) if form_data.origen_url else None,
             "pagina_titulo": form_data.pagina_titulo,
             "tiempo_navegacion": form_data.tiempo_navegacion,
