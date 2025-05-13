@@ -131,7 +131,40 @@ async def create_lead_from_form(form_data: LeadFormData):
                 
             logger.info(f"Datos actualizados para lead existente: {lead_id}")
             
-        # 5. Registrar evento y metadata
+        # 5. Crear o actualizar entrada en dim_entidades
+        entidad_data = {
+            "entidad_id": str(lead_id),
+            "tipo_entidad": "lead",
+            "entidad_original_id": str(lead_id),
+            "nombre": form_data.nombre,
+            "descripcion": "Lead creado desde formulario web",
+            "metadata": {
+                "email": form_data.email,
+                "telefono": form_data.telefono,
+                "pais": form_data.pais,
+                "ciudad": form_data.ciudad
+            },
+            "is_active": True
+        }
+        
+        # Verificar si ya existe la entidad
+        entidad_result = supabase.table("dim_entidades")\
+            .select("*")\
+            .eq("entidad_id", str(lead_id))\
+            .limit(1)\
+            .execute()
+            
+        if not entidad_result.data:
+            # Crear nueva entidad
+            supabase.table("dim_entidades").insert(entidad_data).execute()
+        else:
+            # Actualizar entidad existente
+            supabase.table("dim_entidades")\
+                .update(entidad_data)\
+                .eq("entidad_id", str(lead_id))\
+                .execute()
+        
+        # 6. Registrar evento y metadata
         event_data = {
             "origen_url": str(form_data.origen_url) if form_data.origen_url else None,
             "pagina_titulo": form_data.pagina_titulo,
@@ -140,20 +173,76 @@ async def create_lead_from_form(form_data: LeadFormData):
             "ip_address": form_data.ip_address,
             **(form_data.metadata or {})
         }
-        
+          # Crear o obtener registro en dim_tiempo para la fecha actual
+        fecha_actual = datetime.now()
+        tiempo_result = supabase.table("dim_tiempo")\
+            .select("tiempo_id")\
+            .eq("fecha", fecha_actual.date().isoformat())\
+            .limit(1)\
+            .execute()
+
+        tiempo_id = None
+        if tiempo_result.data:
+            tiempo_id = tiempo_result.data[0]["tiempo_id"]
+        else:
+            # Crear nuevo registro en dim_tiempo
+            tiempo_data = {
+                "fecha": fecha_actual.date().isoformat(),
+                "dia_semana": fecha_actual.weekday(),
+                "dia": fecha_actual.day,
+                "semana": fecha_actual.isocalendar()[1],
+                "mes": fecha_actual.month,
+                "trimestre": (fecha_actual.month - 1) // 3 + 1,
+                "anio": fecha_actual.year,
+                "es_fin_semana": fecha_actual.weekday() >= 5,
+                "nombre_dia": fecha_actual.strftime("%A"),
+                "nombre_mes": fecha_actual.strftime("%B"),
+                "fecha_completa": fecha_actual.isoformat()
+            }
+            tiempo_insert = supabase.table("dim_tiempo").insert(tiempo_data).execute()
+            if tiempo_insert.data:
+                tiempo_id = tiempo_insert.data[0]["tiempo_id"]
+            else:
+                raise HTTPException(status_code=500, detail="Error al crear registro de tiempo")
+
+        # Obtener tipo_evento_id para formularios web
+        tipo_evento_result = supabase.table("dim_tipos_eventos")\
+            .select("tipo_evento_id")\
+            .eq("nombre", "formulario_web_completado")\
+            .eq("categoria", "lead")\
+            .limit(1)\
+            .execute()
+
+        tipo_evento_id = None
+        if tipo_evento_result.data:
+            tipo_evento_id = tipo_evento_result.data[0]["tipo_evento_id"]
+        else:
+            # Crear nuevo tipo de evento
+            tipo_evento_data = {
+                "categoria": "lead",
+                "nombre": "formulario_web_completado",
+                "descripcion": "El lead completó un formulario web"
+            }
+            tipo_evento_insert = supabase.table("dim_tipos_eventos").insert(tipo_evento_data).execute()
+            if tipo_evento_insert.data:
+                tipo_evento_id = tipo_evento_insert.data[0]["tipo_evento_id"]
+            else:
+                raise HTTPException(status_code=500, detail="Error al crear tipo de evento")
+
         # Crear el registro en fact_eventos_acciones
         evento = {
             "evento_accion_id": str(uuid4()),
-            "tiempo_id": None,  # Se puede agregar lógica para relacionar con dim_tiempo
+            "tiempo_id": tiempo_id,
             "empresa_id": str(form_data.empresa_id),
-            "tipo_evento_id": None,  # Se puede agregar un tipo específico para formularios web
+            "tipo_evento_id": tipo_evento_id,
+            "entidad_origen_id": str(lead_id),  # El lead es la entidad que origina el evento
             "lead_id": str(lead_id),
             "canal_id": str(canal_id),
             "valor_score": 10,  # Valor por defecto por llenar formulario
             "resultado": "completado",
             "detalle": "Formulario web completado",
             "metadata": event_data,
-            "created_at": datetime.now().isoformat()
+            "created_at": fecha_actual.isoformat()
         }
         
         supabase.table("fact_eventos_acciones").insert(evento).execute()
