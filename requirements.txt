@@ -44,3 +44,5 @@ html2text>=2020.1.16
 lxml>=4.9.3
 # Dependencia para EPUB (opcional)
 ebooklib>=0.18
+# Dependencia para Airtable
+pyairtable>=2.0.0
