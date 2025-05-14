@@ -3,6 +3,8 @@ from fastapi import APIRouter, HTTPException
 from uuid import UUID, uuid4
 from datetime import datetime
 import logging
+import os
+from pyairtable import Api as AirtableApi
 
 from app.models.v2.lead_form import LeadFormData, LeadFormResponse
 from app.db.supabase_client import supabase
@@ -10,6 +12,10 @@ from app.services.conversation_service import conversation_service
 
 # Configurar logger
 logger = logging.getLogger(__name__)
+
+# Configurar Airtable
+airtable = AirtableApi(os.getenv('AIRTABLE_API_KEY'))
+table = airtable.table(os.getenv('AIRTABLE_BASE_ID'), os.getenv('AIRTABLE_TABLE_NAME'))
 
 router = APIRouter()
 
@@ -163,6 +169,34 @@ async def create_lead_from_form(form_data: LeadFormData):
                 .update(entidad_data)\
                 .eq("entidad_id", str(lead_id))\
                 .execute()
+        
+        # 7. Enviar datos a Airtable
+        try:
+            airtable_data = {
+                "nombre completo": form_data.nombre,
+                "Número de celular": form_data.telefono,
+                "email": form_data.email,
+                "programa de interes": form_data.pagina_titulo,
+                "Metadata": str(event_data),
+                "Medio de Llegada": str(canal_id)
+            }
+            
+            # Buscar si ya existe un registro con el mismo email o teléfono
+            existing_records = table.all(formula=f"OR({{email}}='{form_data.email}', {{Número de celular}}='{form_data.telefono}')") if form_data.email or form_data.telefono else []
+            
+            if existing_records:
+                # Actualizar registro existente
+                record_id = existing_records[0]['id']
+                table.update(record_id, airtable_data)
+                logger.info(f"Registro actualizado en Airtable para lead {lead_id}")
+            else:
+                # Crear nuevo registro
+                table.create(airtable_data)
+                logger.info(f"Nuevo registro creado en Airtable para lead {lead_id}")
+                
+        except Exception as e:
+            logger.error(f"Error al sincronizar con Airtable: {str(e)}")
+            # No lanzamos excepción para no interrumpir el flujo principal
         
         # 6. Registrar evento y metadata
         event_data =  {
