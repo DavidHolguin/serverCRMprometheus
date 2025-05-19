@@ -9,7 +9,7 @@ class DataCaptureService:
     """Servicio para capturar datos personales de mensajes"""
     
     # Chatbot ID específico para captura de datos
-    CAPTURE_CHATBOT_ID = "c5fdb8dc-38cb-425a-b760-3ca6c4a32621"
+    CAPTURE_CHATBOT_ID = "6082011f-53c9-470f-8485-9edfaceb720d"
     
     def __init__(self):
         """Inicializa el servicio de captura de datos"""
