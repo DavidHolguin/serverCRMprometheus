@@ -72,7 +72,30 @@ class DataCaptureService:
         Returns:
             True si se almacenaron correctamente, False en caso contrario
         """
+        from app.services.conversation_service import ConversationService
+        
         try:
+            # Asegurar que el lead existe primero
+            conv_service = ConversationService()
+            lead = supabase.table("leads").select("empresa_id,canal_id").eq("id", str(lead_id)).execute().data
+            
+            if not lead:
+                # Crear lead básico si no existe
+                chatbot_result = supabase.table("chatbots").select("empresa_id, canal_id").eq("id", self.CAPTURE_CHATBOT_ID).execute()
+                
+                if chatbot_result.data:
+                    empresa_id = chatbot_result.data[0]['empresa_id']
+                    canal_id = chatbot_result.data[0]['canal_id']
+                    
+                    lead = conv_service.get_or_create_lead(
+                        empresa_id=UUID(empresa_id),
+                        canal_id=UUID(canal_id),
+                        nombre=data.get('nombre', 'Lead desde captura')
+                    )
+                else:
+                    raise ValueError("Chatbot de captura no encontrado")
+                lead_id = UUID(lead["id"])
+            
             # Verificar si ya existen datos para este lead
             result = supabase.table("lead_datos_personales").select("*").eq("lead_id", str(lead_id)).execute()
             
@@ -152,6 +175,22 @@ class DataCaptureService:
         Returns:
             Tupla con (es_confirmacion, respuesta)
         """
+        from app.services.conversation_service import ConversationService
+        
+        # Asegurar que el lead existe antes de confirmar
+        conversation_service = ConversationService()
+        try:
+            # Verificar si el lead existe
+            lead = supabase.table("leads").select("*").eq("id", str(lead_id)).execute().data
+            if not lead:
+                # Crear lead básico si no existe
+                lead = conversation_service.get_or_create_lead(
+                    empresa_id=UUID(self.EMPRESA_ID),
+                    canal_id=UUID(self.CANAL_ID),
+                    nombre="Cliente potencial"
+                )
+                lead_id = UUID(lead["id"])
+        
         # Patrones para detectar confirmación
         confirmation_patterns = [
             r'\b(s[ií]|correcto|exacto|est[áa] bien|perfecto)\b',
@@ -172,6 +211,16 @@ class DataCaptureService:
                 # Marcar el lead como confirmado
                 try:
                     supabase.table("leads").update({"estado": "confirmado"}).eq("id", str(lead_id)).execute()
+                    # Registrar evento de confirmación
+                    event_service.log_event(
+                        empresa_id=UUID(self.EMPRESA_ID),
+                        event_type=event_service.EVENT_LEAD_CONFIRMED,
+                        entidad_origen_tipo="lead",
+                        entidad_origen_id=lead_id,
+                        lead_id=lead_id,
+                        resultado="success",
+                        detalle="Lead confirmado mediante chatbot de captura"
+                    )
                     return True, "¡Gracias por confirmar tus datos! Han sido registrados correctamente. Pronto nos pondremos en contacto contigo."
                 except Exception as e:
                     print(f"Error al actualizar estado del lead: {e}")
