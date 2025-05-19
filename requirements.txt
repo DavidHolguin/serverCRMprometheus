@@ -1,0 +1,48 @@
+fastapi==0.104.1
+uvicorn==0.23.2
+pydantic>=2.4.2,<3.0
+python-dotenv==1.0.0
+# Actualización a LangChain 0.3
+langchain>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+langchain-community>=0.3.0,<0.4.0
+# OpenAI - actualiza versión para compatibilidad con LangChain 0.3
+langchain-openai>=0.2.0,<0.3.0
+openai>=1.6.0
+# Dependencias de Supabase
+supabase==1.0.4
+python-multipart==0.0.6
+httpx==0.24.1
+requests==2.31.0
+# Dependencias para procesamiento de audio
+pydub==0.25.1
+numpy==1.26.0
+unidecode==1.3.7
+# Dependencias para procesamiento de documentos
+PyPDF2==2.12.1
+# IMPORTANTE: Agregar pypdf para compatibilidad con LangChain 0.3
+pypdf>=3.15.1
+# Dependencias para procesamiento de Excel y páginas web
+pandas==2.0.3
+openpyxl==3.1.2
+beautifulsoup4==4.12.2
+bs4==0.0.1  # Este paquete es un alias que instala beautifulsoup4
+# Agregar dependencias para carga de URLs
+nest_asyncio>=1.5.8
+selenium>=4.10.0
+playwright>=1.40.0
+# Actualizado tiktoken para ser compatible con langchain-openai que requiere >=0.7,<1
+tiktoken>=0.7.0,<1.0.0
+# Dependencia para validación de email
+email-validator>=2.0.0
+# Dependencia de LangChain
+langsmith>=0.1.0,<0.2.0
+# Nuevo paquete para divisores de texto (movidos desde el paquete principal)
+langchain-text-splitters>=0.3.0,<0.4.0
+# Dependencias adicionales para carga de documentos
+html2text>=2020.1.16
+lxml>=4.9.3
+# Dependencia para EPUB (opcional)
+ebooklib>=0.18
+# Dependencia para Airtable
+pyairtable>=2.0.0
