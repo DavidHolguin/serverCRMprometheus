@@ -190,7 +190,10 @@ class DataCaptureService:
                     nombre="Cliente potencial"
                 )
                 lead_id = UUID(lead["id"])
-        
+        except Exception as e:
+            print(f"Error al verificar lead: {e}")
+            return False, "Ocurrió un error al verificar tus datos"
+
         # Patrones para detectar confirmación
         confirmation_patterns = [
             r'\b(s[ií]|correcto|exacto|est[áa] bien|perfecto)\b',
