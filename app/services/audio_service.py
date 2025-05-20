@@ -533,12 +533,19 @@ class AudioService:
                 capture_response = capture_result.get("response")
                 personal_data = capture_result.get("data", {})
                 is_confirmation = capture_result.get("is_confirmation", False)
+                is_new_lead = capture_result.get("is_new_lead", False)
+                
+                # Si se ha creado un nuevo lead, actualizar el lead_id para el resto del proceso
+                if is_new_lead and capture_result.get("lead_id"):
+                    lead_id = capture_result.get("lead_id")
+                    print(f"Nuevo lead detectado y creado: {lead_id}")
             
                 # Actualizar metadata con información de captura de datos
                 message_metadata.update({
                     "is_data_capture": True,
                     "captured_data": personal_data,
-                    "custom_response": capture_response
+                    "custom_response": capture_response,
+                    "is_new_lead": is_new_lead
                 })
             
             # 3. Procesar el mensaje de texto transcrito usando el servicio de conversación

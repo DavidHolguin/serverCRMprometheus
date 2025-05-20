@@ -293,10 +293,21 @@ class DataCaptureService:
                         resultado="success",
                         detalle="Lead confirmado mediante chatbot de captura"
                     )
-                    return True, "¡Gracias por confirmar tus datos! Han sido registrados correctamente. Pronto nos pondremos en contacto contigo."
+                    
+                    # Limpiar datos temporales para permitir registrar un nuevo lead desde el mismo número
+                    # Esto permite que el sistema esté listo para capturar un nuevo lead
+                    try:
+                        # Eliminar datos temporales de la sesión para este lead
+                        # Esto reinicia el estado de captura para estar listo para un nuevo lead
+                        supabase.table("lead_datos_temporales").delete().eq("lead_id", str(lead_id)).execute()
+                        print(f"Datos temporales eliminados para lead {lead_id} - Listo para nuevo registro")
+                    except Exception as temp_e:
+                        print(f"Error al limpiar datos temporales: {temp_e}")
+                    
+                    return True, "¡Gracias por confirmar tus datos! Han sido registrados correctamente. Pronto nos pondremos en contacto contigo. Si deseas registrar a otra persona, puedes proporcionarme sus datos ahora."
                 except Exception as e:
                     print(f"Error al actualizar estado del lead: {e}")
-                    return True, "Gracias por confirmar tus datos. Han sido registrados, pero hubo un problema al actualizar tu estado. No te preocupes, igualmente nos pondremos en contacto contigo."
+                    return True, "Gracias por confirmar tus datos. Han sido registrados, pero hubo un problema al actualizar tu estado. No te preocupes, igualmente nos pondremos en contacto contigo. Si deseas registrar a otra persona, puedes proporcionarme sus datos ahora."
         
         # Verificar si es una negación
         for pattern in negation_patterns:
@@ -347,10 +358,53 @@ class DataCaptureService:
                 is_explicit_confirmation = True
                 break
         
-        # Si ya existe un lead_id y hay una confirmación explícita o ya existen datos, procesar como confirmación
+        # Si ya existe un lead_id, verificar si hay datos confirmados o si es un nuevo registro
         if lead_id:
             # Verificar si ya existen datos para este lead
             result = supabase.table("lead_datos_personales").select("*").eq("lead_id", str(lead_id)).execute()
+            
+            # Verificar si el lead ya está confirmado
+            lead_info = supabase.table("leads").select("estado").eq("id", str(lead_id)).execute().data
+            lead_confirmado = lead_info and lead_info[0].get('estado') == "confirmado"
+            
+            # Si el lead está confirmado y el mensaje no es una confirmación explícita,
+            # podría ser un nuevo registro desde el mismo número
+            if lead_confirmado and not is_explicit_confirmation and len(message.split()) > 3:
+                # Extraer datos del mensaje para ver si contiene información de un nuevo lead
+                new_data = self.extract_personal_data(message)
+                if new_data:
+                    # Crear un nuevo lead para este nuevo conjunto de datos
+                    from app.services.conversation_service import ConversationService
+                    conv_service = ConversationService()
+                    
+                    # Obtener empresa_id y canal_id del chatbot de captura
+                    chatbot_result = supabase.table("chatbots").select("empresa_id, canal_id").eq("id", self.CAPTURE_CHATBOT_ID).execute()
+                    
+                    if chatbot_result.data:
+                        empresa_id = chatbot_result.data[0]['empresa_id']
+                        canal_id = chatbot_result.data[0]['canal_id']
+                        
+                        # Crear nuevo lead con los datos disponibles
+                        new_lead = conv_service.get_or_create_lead(
+                            empresa_id=UUID(empresa_id),
+                            canal_id=UUID(canal_id),
+                            nombre=new_data.get('nombre', 'Nuevo lead desde captura')
+                        )
+                        
+                        new_lead_id = UUID(new_lead["id"])
+                        
+                        # Almacenar los datos personales extraídos para el nuevo lead
+                        self.store_personal_data(new_lead_id, new_data)
+                        
+                        # Generar respuesta para el nuevo lead
+                        response = self.generate_data_capture_response(new_lead_id, new_data, message)
+                        
+                        return {
+                            "response": response,
+                            "lead_id": new_lead_id,
+                            "data": new_data,
+                            "is_new_lead": True
+                        }
             
             # Si hay datos almacenados y es una confirmación explícita o el mensaje es corto (probable confirmación)
             if result.data and len(result.data) > 0 and (is_explicit_confirmation or len(message.split()) <= 3):
