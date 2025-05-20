@@ -20,45 +20,85 @@ class DataCaptureService:
         return chatbot_id == self.CAPTURE_CHATBOT_ID
     
     def extract_personal_data(self, message: str) -> Dict[str, Any]:
-        """Extrae datos personales de un mensaje
+        """Extrae datos personales de un mensaje o transcripción de audio
         
         Args:
-            message: El mensaje del usuario
+            message: El mensaje del usuario o transcripción de audio
             
         Returns:
             Diccionario con los datos personales extraídos
         """
         data = {}
         
-        # Extraer nombre
-        nombre_match = re.search(r'(?:me llamo|soy|nombre[\s:]+es|nombre[\s:]+)\s*([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)', message, re.IGNORECASE)
-        if nombre_match:
-            data['nombre'] = nombre_match.group(1).strip()
+        # Extraer nombre (patrones ampliados para capturar más variaciones)
+        nombre_patterns = [
+            r'(?:me llamo|soy|nombre[\s:]+es|nombre[\s:]+|se llama|nombre[\s:]*|nombre completo[\s:]*|nombre del interesado[\s:]*|cliente[\s:]*|estudiante[\s:]*|persona[\s:]*|participante[\s:]*|interesado[\s:]*|candidato[\s:]*)\s*([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)',
+            r'(?:nombre[\s:]*|nombre completo[\s:]*)[\s:]*([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)',
+            r'(?:^|\s)([A-Za-zÁáÉéÍíÓóÚúÑñ]{2,}\s+[A-Za-zÁáÉéÍíÓóÚúÑñ]{2,}(?:\s+[A-Za-zÁáÉéÍíÓóÚúÑñ]{2,})?)(?:\s|\.|,|$)'
+        ]
         
-        # Extraer correo electrónico
-        email_match = re.search(r'[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}', message)
-        if email_match:
-            data['email'] = email_match.group(0)
+        for pattern in nombre_patterns:
+            nombre_match = re.search(pattern, message, re.IGNORECASE)
+            if nombre_match:
+                nombre = nombre_match.group(1).strip()
+                # Limpiar el nombre (eliminar palabras clave que puedan haberse capturado)
+                nombre = re.sub(r'(?:correo|email|mail|arroba|@|teléfono|celular|móvil|programa|curso|interesad[oa]|quiere|quiero).*$', '', nombre, flags=re.IGNORECASE).strip()
+                if len(nombre) > 3:  # Asegurar que el nombre tenga al menos 3 caracteres
+                    data['nombre'] = nombre
+                    break
+        
+        # Extraer correo electrónico (mejorado para capturar más formatos)
+        email_patterns = [
+            r'[\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,}',
+            r'(?:correo|email|mail|e-mail|correo electrónico)[\s:]*([\w._%+-]+@[\w.-]+\.[a-zA-Z]{2,})',
+            r'(?:arroba|@)[\s:]*([\w._%+-]+(?:@|arroba)[\w.-]+\.[a-zA-Z]{2,})'
+        ]
+        
+        for pattern in email_patterns:
+            email_match = re.search(pattern, message, re.IGNORECASE)
+            if email_match:
+                email = email_match.group(1) if '@' in email_match.group(1) else email_match.group(0)
+                # Limpiar y normalizar el correo
+                email = email.lower().replace('arroba', '@').strip()
+                data['email'] = email
+                break
         
         # Extraer número de teléfono (varios formatos)
         phone_patterns = [
+            r'(?:teléfono|celular|móvil|número|contacto|tel|cel)[\s:]*(?:\+?\d{1,3}[\s-]?)?(?:\(\d{1,4}\)[\s-]?)?\d{6,10}',
+            r'(?:teléfono|celular|móvil|número|contacto|tel|cel)[\s:]*\d{3}[\s.-]?\d{3}[\s.-]?\d{4}',
             r'\b(?:\+?\d{1,3}[\s-]?)?(?:\(\d{1,4}\)[\s-]?)?\d{6,10}\b',  # Formato internacional
             r'\b\d{10}\b',  # 10 dígitos sin separadores
-            r'\b\d{3}[\s-]?\d{3}[\s-]?\d{4}\b',  # Formato XXX-XXX-XXXX
+            r'\b\d{3}[\s.-]?\d{3}[\s.-]?\d{4}\b',  # Formato XXX-XXX-XXXX
         ]
         
         for pattern in phone_patterns:
-            phone_match = re.search(pattern, message)
+            phone_match = re.search(pattern, message, re.IGNORECASE)
             if phone_match:
-                # Limpiar el número de teléfono (eliminar espacios, guiones, etc.)
-                phone = re.sub(r'[\s()-]', '', phone_match.group(0))
-                data['telefono'] = phone
-                break
+                # Extraer solo los dígitos del teléfono
+                phone_text = phone_match.group(0)
+                phone = re.sub(r'[^0-9]', '', phone_text)
+                # Verificar que sea un número válido (al menos 7 dígitos)
+                if len(phone) >= 7:
+                    data['telefono'] = phone
+                    break
         
-        # Extraer programa de interés
-        program_match = re.search(r'(?:interesad[oa] en|quiero|me interesa|programa|curso)[\s:]+([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)', message, re.IGNORECASE)
-        if program_match:
-            data['programa_interes'] = program_match.group(1).strip()
+        # Extraer programa de interés (patrones ampliados)
+        program_patterns = [
+            r'(?:interesad[oa] en|quiero|me interesa|programa|curso|carrera|estudiar|aprender|formación|capacitación|especialización|maestría|diplomado|seminario|taller)[\s:]+([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)',
+            r'(?:programa de interés|programa académico|área de interés)[\s:]*([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)',
+            r'(?:quiere estudiar|va a estudiar|le interesa)[\s:]*([A-Za-zÁáÉéÍíÓóÚúÑñ\s]+)(?:\s|\.|,|$)'
+        ]
+        
+        for pattern in program_patterns:
+            program_match = re.search(pattern, message, re.IGNORECASE)
+            if program_match:
+                programa = program_match.group(1).strip()
+                # Limpiar el programa (eliminar palabras clave que puedan haberse capturado)
+                programa = re.sub(r'(?:correo|email|mail|arroba|@|teléfono|celular|móvil).*$', '', programa, flags=re.IGNORECASE).strip()
+                if len(programa) > 2:  # Asegurar que el programa tenga al menos 3 caracteres
+                    data['programa_interes'] = programa
+                    break
         
         return data
     
@@ -184,11 +224,20 @@ class DataCaptureService:
             lead = supabase.table("leads").select("*").eq("id", str(lead_id)).execute().data
             if not lead:
                 # Crear lead básico si no existe
-                lead = conversation_service.get_or_create_lead(
-                    empresa_id=UUID(self.EMPRESA_ID),
-                    canal_id=UUID(self.CANAL_ID),
-                    nombre="Cliente potencial"
-                )
+                # Obtener empresa_id y canal_id del chatbot de captura
+                chatbot_result = supabase.table("chatbots").select("empresa_id, canal_id").eq("id", self.CAPTURE_CHATBOT_ID).execute()
+                
+                if chatbot_result.data:
+                    empresa_id = chatbot_result.data[0]['empresa_id']
+                    canal_id = chatbot_result.data[0]['canal_id']
+                    
+                    lead = conversation_service.get_or_create_lead(
+                        empresa_id=UUID(empresa_id),
+                        canal_id=UUID(canal_id),
+                        nombre="Cliente potencial"
+                    )
+                else:
+                    raise ValueError("Chatbot de captura no encontrado")
                 lead_id = UUID(lead["id"])
         except Exception as e:
             print(f"Error al verificar lead: {e}")
@@ -213,10 +262,25 @@ class DataCaptureService:
             if re.search(pattern, message, re.IGNORECASE):
                 # Marcar el lead como confirmado
                 try:
+                    # Obtener empresa_id del lead o del chatbot
+                    lead_info = supabase.table("leads").select("empresa_id").eq("id", str(lead_id)).execute().data
+                    
+                    if lead_info and lead_info[0].get('empresa_id'):
+                        empresa_id = lead_info[0]['empresa_id']
+                    else:
+                        # Si no hay empresa_id en el lead, obtenerlo del chatbot
+                        chatbot_result = supabase.table("chatbots").select("empresa_id").eq("id", self.CAPTURE_CHATBOT_ID).execute()
+                        if chatbot_result.data:
+                            empresa_id = chatbot_result.data[0]['empresa_id']
+                        else:
+                            raise ValueError("No se pudo obtener empresa_id")
+                    
+                    # Actualizar estado del lead
                     supabase.table("leads").update({"estado": "confirmado"}).eq("id", str(lead_id)).execute()
+                    
                     # Registrar evento de confirmación
                     event_service.log_event(
-                        empresa_id=UUID(self.EMPRESA_ID),
+                        empresa_id=UUID(empresa_id),
                         event_type=event_service.EVENT_LEAD_CONFIRMED,
                         entidad_origen_tipo="lead",
                         entidad_origen_id=lead_id,
@@ -249,6 +313,60 @@ class DataCaptureService:
         
         # Si no se detecta nada específico
         return False, "No he podido determinar si los datos son correctos. Por favor, responde 'sí' si los datos son correctos, o indícame específicamente qué dato necesita ser corregido."
+
+    def process_capture_message(self, message: str, lead_id: Optional[UUID] = None, chatbot_id: Optional[str] = None) -> Dict[str, Any]:
+        """Procesa un mensaje específicamente para el chatbot de captura de datos
+        
+        Args:
+            message: Mensaje del usuario (puede ser transcripción de audio)
+            lead_id: ID del lead si ya existe
+            chatbot_id: ID del chatbot que recibió el mensaje
+            
+        Returns:
+            Diccionario con la respuesta y el ID del lead
+        """
+        # Verificar si es el chatbot de captura
+        if chatbot_id and not self.is_capture_chatbot(chatbot_id):
+            return {"response": "Este no es un chatbot de captura de datos", "lead_id": lead_id}
+        
+        # Extraer datos personales del mensaje
+        data = self.extract_personal_data(message)
+        
+        # Si no hay lead_id, crear uno nuevo con los datos disponibles
+        if not lead_id:
+            from app.services.conversation_service import ConversationService
+            conv_service = ConversationService()
+            
+            # Obtener empresa_id y canal_id del chatbot de captura
+            chatbot_result = supabase.table("chatbots").select("empresa_id, canal_id").eq("id", self.CAPTURE_CHATBOT_ID).execute()
+            
+            if not chatbot_result.data:
+                return {"response": "Error: No se pudo encontrar el chatbot de captura", "lead_id": None}
+            
+            empresa_id = chatbot_result.data[0]['empresa_id']
+            canal_id = chatbot_result.data[0]['canal_id']
+            
+            # Crear lead con los datos disponibles
+            lead = conv_service.get_or_create_lead(
+                empresa_id=UUID(empresa_id),
+                canal_id=UUID(canal_id),
+                nombre=data.get('nombre', 'Lead desde captura')
+            )
+            
+            lead_id = UUID(lead["id"])
+        
+        # Almacenar los datos personales extraídos
+        if data:
+            self.store_personal_data(lead_id, data)
+        
+        # Generar respuesta basada en los datos capturados
+        response = self.generate_data_capture_response(lead_id, data, message)
+        
+        return {
+            "response": response,
+            "lead_id": lead_id,
+            "data": data
+        }
 
 # Crear instancia del servicio
 data_capture_service = DataCaptureService()
