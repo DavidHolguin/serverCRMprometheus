@@ -243,11 +243,16 @@ class DataCaptureService:
             print(f"Error al verificar lead: {e}")
             return False, "Ocurrió un error al verificar tus datos"
 
-        # Patrones para detectar confirmación
+        # Patrones para detectar confirmación (ampliados para capturar más casos)
         confirmation_patterns = [
             r'\b(s[ií]|correcto|exacto|est[áa] bien|perfecto)\b',
             r'\best[áa]n? bien\b',
-            r'\bconfirm[oa]\b'
+            r'\bconfirm[oa]\b',
+            r'\bperfecto\b',
+            r'\bexcelente\b',
+            r'\bgenial\b',
+            r'\bgracias\b',
+            r'\bok\b'
         ]
         
         # Patrones para detectar negación
@@ -329,6 +334,33 @@ class DataCaptureService:
         if chatbot_id and not self.is_capture_chatbot(chatbot_id):
             return {"response": "Este no es un chatbot de captura de datos", "lead_id": lead_id}
         
+        # Verificar si el mensaje contiene una confirmación explícita
+        confirmation_patterns = [
+            r'\b(s[ií]|correcto|exacto|est[áa] bien|perfecto)\b',
+            r'\best[áa]n? bien\b',
+            r'\bconfirm[oa]\b'
+        ]
+        
+        is_explicit_confirmation = False
+        for pattern in confirmation_patterns:
+            if re.search(pattern, message, re.IGNORECASE):
+                is_explicit_confirmation = True
+                break
+        
+        # Si ya existe un lead_id y hay una confirmación explícita o ya existen datos, procesar como confirmación
+        if lead_id:
+            # Verificar si ya existen datos para este lead
+            result = supabase.table("lead_datos_personales").select("*").eq("lead_id", str(lead_id)).execute()
+            
+            # Si hay datos almacenados y es una confirmación explícita o el mensaje es corto (probable confirmación)
+            if result.data and len(result.data) > 0 and (is_explicit_confirmation or len(message.split()) <= 3):
+                is_confirmation, response_text = self.process_confirmation(message, lead_id)
+                return {
+                    "response": response_text,
+                    "lead_id": lead_id,
+                    "is_confirmation": is_confirmation
+                }
+        
         # Extraer datos personales del mensaje
         data = self.extract_personal_data(message)
         
@@ -358,6 +390,24 @@ class DataCaptureService:
         # Almacenar los datos personales extraídos
         if data:
             self.store_personal_data(lead_id, data)
+            
+            # Si se detectaron todos los datos necesarios y hay una confirmación explícita en el mismo mensaje
+            if all(key in data for key in ['nombre', 'email', 'telefono', 'programa_interes']) and is_explicit_confirmation:
+                is_confirmation, response_text = self.process_confirmation(message, lead_id)
+                return {
+                    "response": response_text,
+                    "lead_id": lead_id,
+                    "is_confirmation": is_confirmation
+                }
+        
+        # Si el mensaje es solo una confirmación pero no se detectaron datos, intentar procesar como confirmación
+        if is_explicit_confirmation and not data:
+            is_confirmation, response_text = self.process_confirmation(message, lead_id)
+            return {
+                "response": response_text,
+                "lead_id": lead_id,
+                "is_confirmation": is_confirmation
+            }
         
         # Generar respuesta basada en los datos capturados
         response = self.generate_data_capture_response(lead_id, data, message)

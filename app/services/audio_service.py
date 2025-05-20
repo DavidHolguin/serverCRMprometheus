@@ -522,16 +522,18 @@ class AudioService:
             
             # Si es el chatbot de captura de datos, procesar con ese servicio
             if is_data_capture:
-                # Extraer datos personales del mensaje transcrito
-                personal_data = data_capture_service.extract_personal_data(transcripcion_texto)
+                # Usar el método completo de procesamiento de captura de datos
+                capture_result = data_capture_service.process_capture_message(
+                    message=transcripcion_texto,
+                    lead_id=lead_id,
+                    chatbot_id=str(chatbot_id)
+                )
                 
-                # Almacenar los datos personales
-                if personal_data:
-                    data_capture_service.store_personal_data(lead_id, personal_data)
-                    
-                # Generar respuesta basada en los datos capturados
-                capture_response = data_capture_service.generate_data_capture_response(lead_id, personal_data, transcripcion_texto)
-                
+                # Obtener la respuesta y los datos del resultado
+                capture_response = capture_result.get("response")
+                personal_data = capture_result.get("data", {})
+                is_confirmation = capture_result.get("is_confirmation", False)
+            
                 # Actualizar metadata con información de captura de datos
                 message_metadata.update({
                     "is_data_capture": True,
