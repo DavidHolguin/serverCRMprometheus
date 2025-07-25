@@ -282,6 +282,10 @@ class AudioService:
                     "segmentos": response_dict.get("segments", [])
                 }
                 
+        except openai.RateLimitError as e:
+            # Manejo específico para errores de cuota de OpenAI
+            logging.warning(f"OpenAI API quota exceeded: {e}")
+            raise ValueError("No se pudo procesar el audio debido a límites de uso del servicio de transcripción.")
         except Exception as e:
             import traceback
             traceback.print_exc()
